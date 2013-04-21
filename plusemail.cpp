@@ -336,6 +336,7 @@ static int DCL_CDECL mod_email_sock_printf(SOCKET sock, const char *format, ...)
     va_end(vargs);
 
     return SOCKET_WRITE(sock, &mybuf[0], strlen(mybuf), 0);
+   // return sock.writeToSocket(&mybuf[0], strlen(mybuf));
 }
 
 // Read a line of input from the socket.
@@ -381,6 +382,7 @@ static int mod_email_sock_readline(SOCKET sock, char *buffer, int maxlen)
         char getme[2];
 
         int numread = SOCKET_READ(sock, &getme[0], 1, 0);
+        //int numread = sock.readFromSocket(&getme[0], 1);
         if (  IS_SOCKET_ERROR(numread)
            || 0 == numread)
         {

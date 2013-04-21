@@ -18,7 +18,6 @@
 #include <sys/select.h>
 #endif // HAVE_SYS_SELECT_H
 #endif // !WIN32
-
 /* these symbols must be defined by the interface */
 
 /* Disconnection reason codes */
@@ -54,37 +53,32 @@
 extern NAMETAB logout_cmdtable[];
 
 typedef struct cmd_block CBLK;
-typedef struct cmd_block_hdr
-{
-    struct cmd_block *nxt;
+typedef struct cmd_block_hdr {
+	struct cmd_block *nxt;
 } CBLKHDR;
 
-typedef struct cmd_block
-{
-    CBLKHDR hdr;
-    char    cmd[LBUF_SIZE - sizeof(CBLKHDR)];
+typedef struct cmd_block {
+	CBLKHDR hdr;
+	char cmd[LBUF_SIZE - sizeof(CBLKHDR)];
 } CBLK;
 
 typedef struct text_block TBLOCK;
-typedef struct text_block_hdr
-{
-    struct text_block *nxt;
-    char    *start;
-    char    *end;
-    size_t   nchars;
-}   TBLOCKHDR;
+typedef struct text_block_hdr {
+	struct text_block *nxt;
+	char *start;
+	char *end;
+	size_t nchars;
+} TBLOCKHDR;
 
-typedef struct text_block
-{
-    TBLOCKHDR hdr;
-    char    data[OUTPUT_BLOCK_SIZE - sizeof(TBLOCKHDR)];
+typedef struct text_block {
+	TBLOCKHDR hdr;
+	char data[OUTPUT_BLOCK_SIZE - sizeof(TBLOCKHDR)];
 } TBLOCK;
 
 typedef struct prog_data PROG;
-struct prog_data
-{
-    dbref    wait_enactor;
-    reg_ref *wait_regs[MAX_GLOBAL_REGS];
+struct prog_data {
+	dbref wait_enactor;
+	reg_ref *wait_regs[MAX_GLOBAL_REGS];
 };
 
 // Input state
@@ -127,67 +121,100 @@ struct prog_data
 #define OPTION_WANTYES_OPPOSITE 5
 
 typedef struct descriptor_data DESC;
-struct descriptor_data
-{
-  CLinearTimeAbsolute connected_at;
-  CLinearTimeAbsolute last_time;
+enum ConnectionType {
+	NORMAL, WEB_SOCKET
+};
+struct descriptor_data {
+private:
+	SOCKET descriptor;
+	ConnectionType _TypeOfSocket;
+public:
+	void setSocket(SOCKET socket, ConnectionType typeOfSocket) {
+		descriptor = socket;
+		_TypeOfSocket = typeOfSocket;
+	}
 
-  SOCKET descriptor;
+	const SOCKET getSocket() {
+		return descriptor;
+	}
+
+	int writeToSocket(const char * pTEXT, const size_t NO_OF_CHARS) {
+		switch (_TypeOfSocket) {
+		case NORMAL:
+			return write(descriptor, pTEXT, strlen(pTEXT));
+			break;
+			// TODO: Add Websocket handler;
+		}
+		return -1;
+	}
+
+	int readFromSocket(char arrTextOut[], const size_t MAX_OUT_SIZE) {
+		switch (_TypeOfSocket) {
+		case NORMAL:
+			return read(descriptor, arrTextOut, MAX_OUT_SIZE);
+			break;
+			// TODO: Add Websocket handler;
+		}
+		return -1;
+	}
+
+	CLinearTimeAbsolute connected_at;
+	CLinearTimeAbsolute last_time;
+
 #ifdef WIN32
-  // these are for the Windows NT TCP/IO
+	// these are for the Windows NT TCP/IO
 #define SIZEOF_OVERLAPPED_BUFFERS 512
-  char input_buffer[SIZEOF_OVERLAPPED_BUFFERS];         // buffer for reading
-  char output_buffer[SIZEOF_OVERLAPPED_BUFFERS];        // buffer for writing
-  OVERLAPPED InboundOverlapped;   // for asynchronous reading
-  OVERLAPPED OutboundOverlapped;  // for asynchronous writing
-  bool bWritePending;             // true if in process of writing
-  bool bConnectionDropped;        // true if we cannot send to player
-  bool bConnectionShutdown;       // true if connection has been shutdown
-  bool bCallProcessOutputLater;   // Does the socket need priming for output.
+	char input_buffer[SIZEOF_OVERLAPPED_BUFFERS];         // buffer for reading
+	char output_buffer[SIZEOF_OVERLAPPED_BUFFERS];// buffer for writing
+	OVERLAPPED InboundOverlapped;// for asynchronous reading
+	OVERLAPPED OutboundOverlapped;// for asynchronous writing
+	bool bWritePending;// true if in process of writing
+	bool bConnectionDropped;// true if we cannot send to player
+	bool bConnectionShutdown;// true if connection has been shutdown
+	bool bCallProcessOutputLater;// Does the socket need priming for output.
 #endif // WIN32
+	int flags;
+	int retries_left;
+	int command_count;
+	int timeout;
+	int host_info;
+	dbref player;
+	char *output_prefix;
+	char *output_suffix;
+	size_t output_size;
+	size_t output_tot;
+	size_t output_lost;
+	TBLOCK *output_head;
+	TBLOCK *output_tail;
+	size_t input_size;
+	size_t input_tot;
+	size_t input_lost;
+	CBLK *input_head;
+	CBLK *input_tail;
+	CBLK *raw_input;
+	char *raw_input_at;
+	size_t nOption;
+	unsigned char aOption[SBUF_SIZE];
+	int raw_input_state;
+	int nvt_sga_him_state;
+	int nvt_sga_us_state;
+	int nvt_eor_him_state;
+	int nvt_eor_us_state;
+	int nvt_naws_him_state;
+	int nvt_naws_us_state;
+	int width;
+	int height;
+	int quota;
+	PROG *program_data;
+	struct descriptor_data *hashnext;
+	struct descriptor_data *next;
+	struct descriptor_data **prev;
 
-  int flags;
-  int retries_left;
-  int command_count;
-  int timeout;
-  int host_info;
-  dbref player;
-  char *output_prefix;
-  char *output_suffix;
-  size_t output_size;
-  size_t output_tot;
-  size_t output_lost;
-  TBLOCK *output_head;
-  TBLOCK *output_tail;
-  size_t input_size;
-  size_t input_tot;
-  size_t input_lost;
-  CBLK *input_head;
-  CBLK *input_tail;
-  CBLK *raw_input;
-  char *raw_input_at;
-  size_t        nOption;
-  unsigned char aOption[SBUF_SIZE];
-  int raw_input_state;
-  int nvt_sga_him_state;
-  int nvt_sga_us_state;
-  int nvt_eor_him_state;
-  int nvt_eor_us_state;
-  int nvt_naws_him_state;
-  int nvt_naws_us_state;
-  int width;
-  int height;
-  int quota;
-  PROG *program_data;
-  struct descriptor_data *hashnext;
-  struct descriptor_data *next;
-  struct descriptor_data **prev;
+	struct sockaddr_in address; /* added 3/6/90 SCG */
 
-  struct sockaddr_in address;   /* added 3/6/90 SCG */
-
-  char addr[51];
-  char username[11];
-  char doing[SIZEOF_DOING_STRING];
+	char addr[51];
+	char username[11];
+	char doing[SIZEOF_DOING_STRING];
 };
 
 int HimState(DESC *d, unsigned char chOption);
@@ -201,7 +228,6 @@ void DisableUs(DESC *d, unsigned char chOption);
 #define DS_CONNECTED    0x0001      // player is connected.
 #define DS_AUTODARK     0x0002      // Wizard was auto set dark.
 #define DS_PUEBLOCLIENT 0x0004      // Client is Pueblo-enhanced.
-
 extern DESC *descriptor_list;
 
 /* from the net interface */
@@ -220,7 +246,6 @@ extern void shovechars(int nPorts, PortInfo aPorts[]);
 extern void process_output(void *, int);
 extern void dump_restart_db(void);
 #endif // WIN32
-
 extern void BuildSignalNamesTable(void);
 extern void set_signals(void);
 
@@ -235,7 +260,8 @@ extern int fetch_height(dbref target);
 extern int fetch_width(dbref target);
 extern const char *time_format_1(int Seconds, size_t maxWidth);
 extern const char *time_format_2(int Seconds);
-extern void update_quotas(CLinearTimeAbsolute& tLast, const CLinearTimeAbsolute& tCurrent);
+extern void update_quotas(CLinearTimeAbsolute& tLast,
+		const CLinearTimeAbsolute& tCurrent);
 extern void raw_notify(dbref, const char *);
 extern void raw_notify_newline(dbref);
 extern void clearstrings(DESC *);
@@ -251,7 +277,7 @@ extern void find_oldest(dbref target, DESC *dOldest[2]);
 extern void check_idle(void);
 void Task_ProcessCommand(void *arg_voidptr, int arg_iInteger);
 extern int site_check(struct in_addr, SITE *);
-extern dbref  find_connected_name(dbref, char *);
+extern dbref find_connected_name(dbref, char *);
 extern void do_command(DESC *, char *);
 extern void desc_addhash(DESC *);
 

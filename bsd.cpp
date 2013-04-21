@@ -1119,7 +1119,7 @@ void SetupPorts(int *pnPorts, PortInfo aPorts[], IntArray *pia)
         {
             k = *pnPorts;
             aPorts[k].port = pia->pi[j];
-            make_socket(aPorts[k]);
+            make_socket(&aPorts[k]);
             if (  !IS_INVALID_SOCKET(aPorts[k].socket)
 #ifndef WIN32
                && ValidSocket(aPorts[k].socket)
@@ -1491,7 +1491,7 @@ void shovechars(int nPorts, PortInfo aPorts[])
 
     avail_descriptors = maxfds - 7;
 
-    while (mudstate.shutdown_flag == 0)
+    while (mudstate.shutdown_flag == false)
     {
         CLinearTimeAbsolute ltaCurrent;
         ltaCurrent.GetUTC();
@@ -1554,11 +1554,11 @@ void shovechars(int nPorts, PortInfo aPorts[])
         {
             if (!d->input_head)
             {
-                FD_SET(d->descriptor, &input_set);
+                FD_SET(d->getSocket(), &input_set);
             }
             if (d->output_head)
             {
-                FD_SET(d->descriptor, &output_set);
+                FD_SET(d->getSocket(), &output_set);
             }
         }
 
@@ -1585,11 +1585,11 @@ void shovechars(int nPorts, PortInfo aPorts[])
                 //
                 DESC_ITER_ALL(d)
                 {
-                    if (!ValidSocket(d->descriptor))
+                    if (!ValidSocket(d->getSocket()))
                     {
                         STARTLOG(LOG_PROBLEMS, "ERR", "EBADF");
                         log_text("Bad descriptor ");
-                        log_number(d->descriptor);
+                        log_number(d->getSocket());
                         ENDLOG;
                         shutdownsock(d, R_SOCKDIED);
                     }
@@ -1676,10 +1676,10 @@ void shovechars(int nPorts, PortInfo aPorts[])
                         log_perror("NET", "FAIL", NULL, "new_connection");
                     }
                 }
-                else if (  !IS_INVALID_SOCKET(newd->descriptor)
-                        && maxd <= newd->descriptor)
+                else if (  !IS_INVALID_SOCKET(newd->getSocket())
+                        && maxd <= newd->getSocket())
                 {
-                    maxd = newd->descriptor + 1;
+                    maxd = newd->getSocket() + 1;
                 }
             }
         }
@@ -1690,7 +1690,7 @@ void shovechars(int nPorts, PortInfo aPorts[])
         {
             // Process input from sockets with pending input.
             //
-            if (CheckInput(d->descriptor))
+            if (CheckInput(d->getSocket()))
             {
                 // Undo autodark
                 //
@@ -1717,7 +1717,7 @@ void shovechars(int nPorts, PortInfo aPorts[])
 
             // Process output for sockets with pending output.
             //
-            if (CheckOutput(d->descriptor))
+            if (CheckOutput(d->getSocket()))
             {
                 process_output(d, true);
             }
@@ -1976,7 +1976,7 @@ void shutdownsock(DESC *d, int reason)
         {
             STARTLOG(LOG_NET | LOG_LOGIN, "NET", "LOGO")
             buff = alloc_mbuf("shutdownsock.LOG.logout");
-            mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ", d->descriptor, d->addr);
+            mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ", d->getSocket(), d->addr);
             log_text(buff);
             log_name(d->player);
             mux_sprintf(buff, MBUF_SIZE, " <Reason: %s>", disc_reasons[reason]);
@@ -1989,14 +1989,14 @@ void shutdownsock(DESC *d, int reason)
             fcache_dump(d, FC_QUIT);
             STARTLOG(LOG_NET | LOG_LOGIN, "NET", "DISC")
             buff = alloc_mbuf("shutdownsock.LOG.disconn");
-            mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ", d->descriptor, d->addr);
+            mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ", d->getSocket(), d->addr);
             log_text(buff);
             log_name(d->player);
             mux_sprintf(buff, MBUF_SIZE, " <Reason: %s>", disc_reasons[reason]);
             log_text(buff);
             free_mbuf(buff);
             ENDLOG;
-            SiteMonSend(d->descriptor, d->addr, d, "Disconnection");
+            SiteMonSend(d->getSocket(), d->addr, d, "Disconnection");
         }
 
         // If requested, write an accounting record of the form:
@@ -2028,11 +2028,11 @@ void shutdownsock(DESC *d, int reason)
         STARTLOG(LOG_SECURITY | LOG_NET, "NET", "DISC");
         buff = alloc_mbuf("shutdownsock.LOG.neverconn");
         mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Connection closed, never connected. <Reason: %s>",
-            d->descriptor, d->addr, disc_reasons[reason]);
+            d->getSocket(), d->addr, disc_reasons[reason]);
         log_text(buff);
         free_mbuf(buff);
         ENDLOG;
-        SiteMonSend(d->descriptor, d->addr, d, "N/C Connection Closed");
+        SiteMonSend(d->getSocket(), d->addr, d, "N/C Connection Closed");
     }
 
     process_output(d, false);
@@ -2126,12 +2126,12 @@ void shutdownsock(DESC *d, int reason)
         }
 #endif
 
-        shutdown(d->descriptor, SD_BOTH);
-        if (SOCKET_CLOSE(d->descriptor) == 0)
+        shutdown(d->getSocket(), SD_BOTH);
+        if (SOCKET_CLOSE(d->getSocket()) == 0)
         {
             DebugTotalSockets--;
         }
-        d->descriptor = INVALID_SOCKET;
+        d->setSocket(INVALID_SOCKET, NORMAL);
 
         *d->prev = d->next;
         if (d->next)
@@ -2170,12 +2170,12 @@ static void shutdownsock_brief(DESC *d)
 
     // cancel any pending reads or writes on this socket
     //
-    if (!fpCancelIo((HANDLE) d->descriptor))
+    if (!fpCancelIo((HANDLE) d->getSocket()))
     {
         Log.tinyprintf("Error %ld on CancelIo" ENDLINE, GetLastError());
     }
 
-    shutdown(d->descriptor, SD_BOTH);
+    shutdown(d->getSocket(), SD_BOTH);
     if (closesocket(d->descriptor) == 0)
     {
         DebugTotalSockets--;
@@ -2296,7 +2296,7 @@ DESC *initializesock(SOCKET s, struct sockaddr_in *a)
     }
 #endif // WIN32
 
-    d->descriptor = s;
+    d->setSocket(s, NORMAL);
     d->flags = 0;
     d->connected_at.GetUTC();
     d->last_time = d->connected_at;
@@ -2569,7 +2569,8 @@ void process_output(void *dvoid, int bHandleShutdown)
     {
         while (tb->hdr.nchars > 0)
         {
-            int cnt = SOCKET_WRITE(d->descriptor, tb->hdr.start, tb->hdr.nchars, 0);
+            //int cnt = SOCKET_WRITE(d->descriptor, tb->hdr.start, tb->hdr.nchars, 0);
+        	int cnt = d->writeToSocket(tb->hdr.start, tb->hdr.nchars);
             if (IS_SOCKET_ERROR(cnt))
             {
                 int iSocketError = SOCKET_LAST_ERROR;
@@ -3379,7 +3380,10 @@ bool process_input(DESC *d)
     mudstate.debug_cmd = "< process_input >";
 
     char buf[LBUF_SIZE];
-    int got = SOCKET_READ(d->descriptor, buf, sizeof(buf), 0);
+    //int got = SOCKET_READ(d->getSocket(), buf, sizeof(buf), 0);
+    int got = d->readFromSocket(buf, sizeof(buf));
+
+    // TODO: Edit this
     if (IS_SOCKET_ERROR(got) || got == 0)
     {
         int iSocketError = SOCKET_LAST_ERROR;
@@ -3408,12 +3412,13 @@ void close_sockets(bool emergency, const char *message)
     {
         if (emergency)
         {
-            SOCKET_WRITE(d->descriptor, message, strlen(message), 0);
-            if (IS_SOCKET_ERROR(shutdown(d->descriptor, SD_BOTH)))
+            //SOCKET_WRITE(d->getSocket(), message, strlen(message), 0);
+            d->writeToSocket(message, strlen(message));
+            if (IS_SOCKET_ERROR(shutdown(d->getSocket(), SD_BOTH)))
             {
                 log_perror("NET", "FAIL", NULL, "shutdown");
             }
-            if (SOCKET_CLOSE(d->descriptor) == 0)
+            if (SOCKET_CLOSE(d->getSocket()) == 0)
             {
                 DebugTotalSockets--;
             }

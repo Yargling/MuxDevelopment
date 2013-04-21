@@ -3368,7 +3368,7 @@ void dump_restart_db(void)
     putref(f, mudstate.record_players);
     DESC_ITER_ALL(d)
     {
-        putref(f, d->descriptor);
+        putref(f, d->getSocket());
         putref(f, d->flags);
         putref(f, d->connected_at.ReturnSeconds());
         putref(f, d->command_count);
@@ -3458,7 +3458,7 @@ void load_restart_db(void)
         ndescriptors++;
         DebugTotalSockets++;
         d = alloc_desc("restart");
-        d->descriptor = val;
+        d->setSocket(val, NORMAL);
         d->flags = getref(f);
         d->connected_at.SetSeconds(getref(f));
         d->command_count = getref(f);
@@ -3556,9 +3556,9 @@ void load_restart_db(void)
             descriptor_list = d;
         }
 
-        if (maxd <= d->descriptor)
+        if (maxd <= d->getSocket())
         {
-            maxd = d->descriptor + 1;
+            maxd = d->getSocket() + 1;
         }
         desc_addhash(d);
         if (isPlayer(d->player))

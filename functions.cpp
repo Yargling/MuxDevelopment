@@ -7284,7 +7284,7 @@ static FUNCTION(fun_height)
         DESC *d;
         DESC_ITER_CONN(d)
         {
-            if (d->descriptor == s)
+            if (d->getSocket() == s)
             {
                 nHeight = d->height;
                 break;
@@ -7324,7 +7324,7 @@ static FUNCTION(fun_width)
         DESC *d;
         DESC_ITER_CONN(d)
         {
-            if (d->descriptor == s)
+            if (d->getSocket() == s)
             {
                 nWidth = d->width;
                 break;
@@ -7371,7 +7371,7 @@ static FUNCTION(fun_idle)
         ltaNow.GetUTC();
         DESC_ITER_CONN(d)
         {
-            if (d->descriptor == s)
+            if (d->getSocket() == s)
             {
                 bFound = true;
                 break;
@@ -7422,7 +7422,7 @@ static FUNCTION(fun_conn)
         ltaNow.GetUTC();
         DESC_ITER_CONN(d)
         {
-            if (d->descriptor == s)
+            if (d->getSocket() == s)
             {
                 bFound = true;
                 break;
@@ -9219,7 +9219,7 @@ static FUNCTION(fun_cmds)
         DESC *d;
         DESC_ITER_CONN(d)
         {
-            if (d->descriptor == s)
+            if (d->getSocket() == s)
             {
                 bFound = true;
                 break;

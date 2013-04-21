@@ -195,6 +195,7 @@ void fcache_rawdump(SOCKET fd, int num)
         remaining = fp->hdr.nchars;
         while (remaining > 0)
         {
+        	//cnt = fd.writeToSocket(start, remaining);
             cnt = SOCKET_WRITE(fd, start, remaining, 0);
             if (cnt < 0)
             {
