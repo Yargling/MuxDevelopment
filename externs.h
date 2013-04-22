@@ -10,6 +10,7 @@
 #include "match.h"
 #include "mudconf.h"
 #include "svdrand.h"
+#include "interface.h"
 
 // From bsd.cpp.
 //
@@ -908,11 +909,15 @@ void list_system_resources(dbref player);
 int DoThingToThingVisibility(dbref looker, dbref lookee, int action_state);
 #endif // WOD_REALMS
 
-typedef struct
+struct PortInfo
 {
     int    port;
     SOCKET socket;
-} PortInfo;
+    ConnectionType type;
+
+    PortInfo() : port(-1), socket(), type(NORMAL) {
+    }
+};
 
 #define MAX_LISTEN_PORTS 10
 extern PortInfo aMainGamePorts[MAX_LISTEN_PORTS];

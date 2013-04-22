@@ -18,7 +18,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #endif // !WIN32
-
 #include <signal.h>
 
 #include "attrs.h"
@@ -30,9 +29,8 @@
 extern const int _sys_nsig;
 #define NSIG _sys_nsig
 #endif // SOLARIS
-
 PortInfo aMainGamePorts[MAX_LISTEN_PORTS];
-int      nMainGamePorts = 0;
+int nMainGamePorts = 0;
 
 unsigned int ndescriptors = 0;
 DESC *descriptor_list = NULL;
@@ -57,7 +55,6 @@ pid_t sqlslave_pid = 0;
 int sqlslave_socket = INVALID_SOCKET;
 #endif // QUERY_SLAVE
 #endif // WIN32
-
 #ifdef WIN32
 
 // First version of Windows NT TCP/IP routines written by Nick Gammon
@@ -67,22 +64,22 @@ int sqlslave_socket = INVALID_SOCKET;
 HANDLE hGameProcess = INVALID_HANDLE_VALUE;
 FCANCELIO *fpCancelIo = NULL;
 FGETPROCESSTIMES *fpGetProcessTimes = NULL;
-HANDLE CompletionPort;    // IOs are queued up on this port
-bool  bUseCompletionPorts = true;
-static OVERLAPPED lpo_aborted; // special to indicate a player has finished TCP IOs
-static OVERLAPPED lpo_aborted_final; // Finally free the descriptor.
-static OVERLAPPED lpo_shutdown; // special to indicate a player should do a shutdown
-static OVERLAPPED lpo_welcome; // special to indicate a player has -just- connected.
-static OVERLAPPED lpo_wakeup;  // special to indicate that the loop should wakeup and return.
-CRITICAL_SECTION csDescriptorList;      // for thread synchronization
+HANDLE CompletionPort;// IOs are queued up on this port
+bool bUseCompletionPorts = true;
+static OVERLAPPED lpo_aborted;// special to indicate a player has finished TCP IOs
+static OVERLAPPED lpo_aborted_final;// Finally free the descriptor.
+static OVERLAPPED lpo_shutdown;// special to indicate a player should do a shutdown
+static OVERLAPPED lpo_welcome;// special to indicate a player has -just- connected.
+static OVERLAPPED lpo_wakeup;// special to indicate that the loop should wakeup and return.
+CRITICAL_SECTION csDescriptorList;// for thread synchronization
 static DWORD WINAPI MUDListenThread(LPVOID pVoid);
-static void ProcessWindowsTCP(DWORD dwTimeout);  // handle NT-style IOs
+static void ProcessWindowsTCP(DWORD dwTimeout);// handle NT-style IOs
 
 typedef struct
 {
-    int                port_in;
-    struct sockaddr_in sa_in;
-} SLAVE_REQUEST;
+	int port_in;
+	struct sockaddr_in sa_in;
+}SLAVE_REQUEST;
 
 static HANDLE hSlaveRequestStackSemaphore;
 #define SLAVE_REQUEST_STACK_SIZE 50
@@ -91,10 +88,10 @@ static int iSlaveRequest = 0;
 #define MAX_STRING 514
 typedef struct
 {
-    char host[MAX_STRING];
-    char token[MAX_STRING];
-    char ident[MAX_STRING];
-} SLAVE_RESULT;
+	char host[MAX_STRING];
+	char token[MAX_STRING];
+	char ident[MAX_STRING];
+}SLAVE_RESULT;
 
 static HANDLE hSlaveResultStackSemaphore;
 #define SLAVE_RESULT_STACK_SIZE 50
@@ -104,409 +101,402 @@ static volatile int iSlaveResult = 0;
 #define NUM_SLAVE_THREADS 5
 typedef struct tagSlaveThreadsInfo
 {
-    unsigned iDoing;
-    DWORD    iError;
-    DWORD    hThreadId;
-} SLAVETHREADINFO;
+	unsigned iDoing;
+	DWORD iError;
+	DWORD hThreadId;
+}SLAVETHREADINFO;
 static SLAVETHREADINFO SlaveThreadInfo[NUM_SLAVE_THREADS];
 static HANDLE hSlaveThreadsSemaphore;
 
 static DWORD WINAPI SlaveProc(LPVOID lpParameter)
 {
-    SLAVE_REQUEST req;
-    unsigned long addr;
-    struct hostent *hp;
-    DWORD iSlave = (DWORD)lpParameter;
+	SLAVE_REQUEST req;
+	unsigned long addr;
+	struct hostent *hp;
+	DWORD iSlave = (DWORD)lpParameter;
 
-    if (NUM_SLAVE_THREADS <= iSlave) return 1;
+	if (NUM_SLAVE_THREADS <= iSlave) return 1;
 
-    SlaveThreadInfo[iSlave].iDoing = __LINE__;
-    for (;;)
-    {
-        // Go to sleep until there's something useful to do.
-        //
-        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-        DWORD dwReason = WaitForSingleObject(hSlaveThreadsSemaphore,
-            30000UL*NUM_SLAVE_THREADS);
-        switch (dwReason)
-        {
-        case WAIT_TIMEOUT:
-        case WAIT_OBJECT_0:
+	SlaveThreadInfo[iSlave].iDoing = __LINE__;
+	for (;;)
+	{
+		// Go to sleep until there's something useful to do.
+		//
+		SlaveThreadInfo[iSlave].iDoing = __LINE__;
+		DWORD dwReason = WaitForSingleObject(hSlaveThreadsSemaphore,
+				30000UL*NUM_SLAVE_THREADS);
+		switch (dwReason)
+		{
+			case WAIT_TIMEOUT:
+			case WAIT_OBJECT_0:
 
-            // Either the main game thread rang, or 60 seconds has past,
-            // and it's probably a good idea to check the stack anyway.
-            //
-            break;
+			// Either the main game thread rang, or 60 seconds has past,
+			// and it's probably a good idea to check the stack anyway.
+			//
+			break;
 
-        default:
+			default:
 
-            // Either the main game thread has terminated, in which case
-            // we want to, too, or the function itself has failed, in which
-            // case: calling it again won't do much good.
-            //
-            SlaveThreadInfo[iSlave].iError = __LINE__;
-            return 1;
-        }
+			// Either the main game thread has terminated, in which case
+			// we want to, too, or the function itself has failed, in which
+			// case: calling it again won't do much good.
+			//
+			SlaveThreadInfo[iSlave].iError = __LINE__;
+			return 1;
+		}
 
-        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-        for (;;)
-        {
-            // Go take the request off the stack, but not if it takes more
-            // than 5 seconds to do it. Go back to sleep if we time out. The
-            // request can wait: either another thread will pick it up, or
-            // we'll wakeup in 60 seconds anyway.
-            //
-            SlaveThreadInfo[iSlave].iDoing = __LINE__;
-            if (WAIT_OBJECT_0 != WaitForSingleObject(hSlaveRequestStackSemaphore, 5000))
-            {
-                SlaveThreadInfo[iSlave].iError = __LINE__;
-                break;
-            }
+		SlaveThreadInfo[iSlave].iDoing = __LINE__;
+		for (;;)
+		{
+			// Go take the request off the stack, but not if it takes more
+			// than 5 seconds to do it. Go back to sleep if we time out. The
+			// request can wait: either another thread will pick it up, or
+			// we'll wakeup in 60 seconds anyway.
+			//
+			SlaveThreadInfo[iSlave].iDoing = __LINE__;
+			if (WAIT_OBJECT_0 != WaitForSingleObject(hSlaveRequestStackSemaphore, 5000))
+			{
+				SlaveThreadInfo[iSlave].iError = __LINE__;
+				break;
+			}
 
-            SlaveThreadInfo[iSlave].iDoing = __LINE__;
+			SlaveThreadInfo[iSlave].iDoing = __LINE__;
 
-            // We have control of the stack.
-            //
-            if (iSlaveRequest <= 0)
-            {
-                // The stack is empty. Release control and go back to sleep.
-                //
-                SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
-                SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                break;
-            }
+			// We have control of the stack.
+			//
+			if (iSlaveRequest <= 0)
+			{
+				// The stack is empty. Release control and go back to sleep.
+				//
+				SlaveThreadInfo[iSlave].iDoing = __LINE__;
+				ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
+				SlaveThreadInfo[iSlave].iDoing = __LINE__;
+				break;
+			}
 
-            // Remove the request from the stack.
-            //
-            iSlaveRequest--;
-            req = SlaveRequests[iSlaveRequest];
+			// Remove the request from the stack.
+			//
+			iSlaveRequest--;
+			req = SlaveRequests[iSlaveRequest];
 
-            SlaveThreadInfo[iSlave].iDoing = __LINE__;
-            ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
-            SlaveThreadInfo[iSlave].iDoing = __LINE__;
+			SlaveThreadInfo[iSlave].iDoing = __LINE__;
+			ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
+			SlaveThreadInfo[iSlave].iDoing = __LINE__;
 
-            // Ok, we have complete control of this address, now, so let's
-            // do the host/ident thing.
-            //
+			// Ok, we have complete control of this address, now, so let's
+			// do the host/ident thing.
+			//
 
-            // Take note of what time it is.
-            //
+			// Take note of what time it is.
+			//
 #define IDENT_PROTOCOL_TIMEOUT 5*60 // 5 minutes expressed in seconds.
-            CLinearTimeAbsolute ltaTimeoutOrigin;
-            ltaTimeoutOrigin.GetUTC();
-            CLinearTimeDelta ltdTimeout;
-            ltdTimeout.SetSeconds(IDENT_PROTOCOL_TIMEOUT);
-            CLinearTimeAbsolute ltaTimeoutForward(ltaTimeoutOrigin, ltdTimeout);
-            ltdTimeout.SetSeconds(-IDENT_PROTOCOL_TIMEOUT);
-            CLinearTimeAbsolute ltaTimeoutBackward(ltaTimeoutOrigin, ltdTimeout);
+			CLinearTimeAbsolute ltaTimeoutOrigin;
+			ltaTimeoutOrigin.GetUTC();
+			CLinearTimeDelta ltdTimeout;
+			ltdTimeout.SetSeconds(IDENT_PROTOCOL_TIMEOUT);
+			CLinearTimeAbsolute ltaTimeoutForward(ltaTimeoutOrigin, ltdTimeout);
+			ltdTimeout.SetSeconds(-IDENT_PROTOCOL_TIMEOUT);
+			CLinearTimeAbsolute ltaTimeoutBackward(ltaTimeoutOrigin, ltdTimeout);
 
-            addr = req.sa_in.sin_addr.S_un.S_addr;
-            hp = gethostbyaddr((char *)&addr, sizeof(addr), AF_INET);
+			addr = req.sa_in.sin_addr.S_un.S_addr;
+			hp = gethostbyaddr((char *)&addr, sizeof(addr), AF_INET);
 
-            if (  hp
-               && strlen(hp->h_name) < MAX_STRING)
-            {
-                SlaveThreadInfo[iSlave].iDoing = __LINE__;
+			if ( hp
+					&& strlen(hp->h_name) < MAX_STRING)
+			{
+				SlaveThreadInfo[iSlave].iDoing = __LINE__;
 
-                char host[MAX_STRING];
-                char token[MAX_STRING];
-                char szIdent[MAX_STRING];
-                struct sockaddr_in sin;
-                memset(&sin, 0, sizeof(sin));
-                SOCKET s;
+				char host[MAX_STRING];
+				char token[MAX_STRING];
+				char szIdent[MAX_STRING];
+				struct sockaddr_in sin;
+				memset(&sin, 0, sizeof(sin));
+				SOCKET s;
 
-                // We have a host name.
-                //
-                mux_strncpy(host, inet_ntoa(req.sa_in.sin_addr), MAX_STRING-1);
-                mux_strncpy(token, hp->h_name, MAX_STRING-1);
+				// We have a host name.
+				//
+				mux_strncpy(host, inet_ntoa(req.sa_in.sin_addr), MAX_STRING-1);
+				mux_strncpy(token, hp->h_name, MAX_STRING-1);
 
-                // Setup ident port.
-                //
-                sin.sin_family = hp->h_addrtype;
-                memcpy(&sin.sin_addr, hp->h_addr, hp->h_length);
-                sin.sin_port = htons(113);
+				// Setup ident port.
+				//
+				sin.sin_family = hp->h_addrtype;
+				memcpy(&sin.sin_addr, hp->h_addr, hp->h_length);
+				sin.sin_port = htons(113);
 
-                szIdent[0] = 0;
-                s = socket(hp->h_addrtype, SOCK_STREAM, 0);
-                SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                if (s != INVALID_SOCKET)
-                {
-                    SlaveThreadInfo[iSlave].iDoing = __LINE__;
+				szIdent[0] = 0;
+				s = socket(hp->h_addrtype, SOCK_STREAM, 0);
+				SlaveThreadInfo[iSlave].iDoing = __LINE__;
+				if (s != INVALID_SOCKET)
+				{
+					SlaveThreadInfo[iSlave].iDoing = __LINE__;
 
-                    DebugTotalSockets++;
-                    if (connect(s, (struct sockaddr *)&sin, sizeof(sin)) == SOCKET_ERROR)
-                    {
-                        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                        shutdown(s, SD_BOTH);
-                        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                        if (closesocket(s) == 0)
-                        {
-                            DebugTotalSockets--;
-                        }
-                        s = INVALID_SOCKET;
-                    }
-                    else
-                    {
-                        int TurnOn = 1;
-                        setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (char *)&TurnOn, sizeof(TurnOn));
+					DebugTotalSockets++;
+					if (connect(s, (struct sockaddr *)&sin, sizeof(sin)) == SOCKET_ERROR)
+					{
+						SlaveThreadInfo[iSlave].iDoing = __LINE__;
+						shutdown(s, SD_BOTH);
+						SlaveThreadInfo[iSlave].iDoing = __LINE__;
+						if (closesocket(s) == 0)
+						{
+							DebugTotalSockets--;
+						}
+						s = INVALID_SOCKET;
+					}
+					else
+					{
+						int TurnOn = 1;
+						setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (char *)&TurnOn, sizeof(TurnOn));
 
-                        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                        char szPortPair[128];
-                        mux_sprintf(szPortPair, sizeof(szPortPair), "%d, %d\r\n",
-                            ntohs(req.sa_in.sin_port), req.port_in);
-                        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                        size_t nPortPair = strlen(szPortPair);
+						SlaveThreadInfo[iSlave].iDoing = __LINE__;
+						char szPortPair[128];
+						mux_sprintf(szPortPair, sizeof(szPortPair), "%d, %d\r\n",
+								ntohs(req.sa_in.sin_port), req.port_in);
+						SlaveThreadInfo[iSlave].iDoing = __LINE__;
+						size_t nPortPair = strlen(szPortPair);
 
-                        CLinearTimeAbsolute ltaCurrent;
-                        ltaCurrent.GetUTC();
-                        if (  ltaTimeoutBackward < ltaCurrent
-                           && ltaCurrent < ltaTimeoutForward
-                           && send(s, szPortPair, static_cast<int>(nPortPair), 0) != SOCKET_ERROR)
-                        {
-                            SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                            int nIdent = 0;
-                            int cc;
+						CLinearTimeAbsolute ltaCurrent;
+						ltaCurrent.GetUTC();
+						if ( ltaTimeoutBackward < ltaCurrent
+								&& ltaCurrent < ltaTimeoutForward
+								&& send(s, szPortPair, static_cast<int>(nPortPair), 0) != SOCKET_ERROR)
+						{
+							SlaveThreadInfo[iSlave].iDoing = __LINE__;
+							int nIdent = 0;
+							int cc;
 
-                            char szIdentBuffer[MAX_STRING];
-                            szIdentBuffer[0] = 0;
-                            bool bAllDone = false;
+							char szIdentBuffer[MAX_STRING];
+							szIdentBuffer[0] = 0;
+							bool bAllDone = false;
 
-                            ltaCurrent.GetUTC();
-                            while (  !bAllDone
-                                  && nIdent < sizeof(szIdent)-1
-                                  && ltaTimeoutBackward < ltaCurrent
-                                  && ltaCurrent < ltaTimeoutForward
-                                  && (cc = recv(s, szIdentBuffer, sizeof(szIdentBuffer)-1, 0)) != SOCKET_ERROR
-                                  && cc != 0)
-                            {
-                                SlaveThreadInfo[iSlave].iDoing = __LINE__;
+							ltaCurrent.GetUTC();
+							while ( !bAllDone
+									&& nIdent < sizeof(szIdent)-1
+									&& ltaTimeoutBackward < ltaCurrent
+									&& ltaCurrent < ltaTimeoutForward
+									&& (cc = recv(s, szIdentBuffer, sizeof(szIdentBuffer)-1, 0)) != SOCKET_ERROR
+									&& cc != 0)
+							{
+								SlaveThreadInfo[iSlave].iDoing = __LINE__;
 
-                                int nIdentBuffer = cc;
-                                szIdentBuffer[nIdentBuffer] = 0;
+								int nIdentBuffer = cc;
+								szIdentBuffer[nIdentBuffer] = 0;
 
-                                char *p = szIdentBuffer;
-                                for (; nIdent < sizeof(szIdent)-1;)
-                                {
-                                    if (  *p == '\0'
-                                       || *p == '\r'
-                                       || *p == '\n')
-                                    {
-                                        bAllDone = true;
-                                        break;
-                                    }
-                                    if (mux_isprint(*p))
-                                    {
-                                        szIdent[nIdent++] = *p;
-                                    }
-                                    p++;
-                                }
-                                szIdent[nIdent] = '\0';
+								char *p = szIdentBuffer;
+								for (; nIdent < sizeof(szIdent)-1;)
+								{
+									if ( *p == '\0'
+											|| *p == '\r'
+											|| *p == '\n')
+									{
+										bAllDone = true;
+										break;
+									}
+									if (mux_isprint(*p))
+									{
+										szIdent[nIdent++] = *p;
+									}
+									p++;
+								}
+								szIdent[nIdent] = '\0';
 
-                                ltaCurrent.GetUTC();
-                            }
-                        }
-                        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                        shutdown(s, SD_BOTH);
-                        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                        if (closesocket(s) == 0)
-                        {
-                            DebugTotalSockets--;
-                        }
-                        s = INVALID_SOCKET;
-                    }
-                }
+								ltaCurrent.GetUTC();
+							}
+						}
+						SlaveThreadInfo[iSlave].iDoing = __LINE__;
+						shutdown(s, SD_BOTH);
+						SlaveThreadInfo[iSlave].iDoing = __LINE__;
+						if (closesocket(s) == 0)
+						{
+							DebugTotalSockets--;
+						}
+						s = INVALID_SOCKET;
+					}
+				}
 
-                SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                if (WAIT_OBJECT_0 == WaitForSingleObject(hSlaveResultStackSemaphore, INFINITE))
-                {
-                    SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                    if (iSlaveResult < SLAVE_RESULT_STACK_SIZE)
-                    {
-                        SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                        mux_strncpy(SlaveResults[iSlaveResult].host, host, MAX_STRING-1);
-                        mux_strncpy(SlaveResults[iSlaveResult].token, token, MAX_STRING-1);
-                        mux_strncpy(SlaveResults[iSlaveResult].ident, szIdent, MAX_STRING-1);
-                        iSlaveResult++;
-                    }
-                    else
-                    {
-                        // The result stack is full, so we just toss
-                        // the info and act like it never happened.
-                        //
-                        SlaveThreadInfo[iSlave].iError = __LINE__;
-                    }
-                    SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                    ReleaseSemaphore(hSlaveResultStackSemaphore, 1, NULL);
-                    SlaveThreadInfo[iSlave].iDoing = __LINE__;
-                }
-                else
-                {
-                    // The main game thread terminated or the function itself failed,
-                    // There isn't much left to do except terminate ourselves.
-                    //
-                    SlaveThreadInfo[iSlave].iError = __LINE__;
-                    return 1;
-                }
-            }
-        }
-    }
-    //SlaveThreadInfo[iSlave].iDoing = __LINE__;
-    //return 1;
+				SlaveThreadInfo[iSlave].iDoing = __LINE__;
+				if (WAIT_OBJECT_0 == WaitForSingleObject(hSlaveResultStackSemaphore, INFINITE))
+				{
+					SlaveThreadInfo[iSlave].iDoing = __LINE__;
+					if (iSlaveResult < SLAVE_RESULT_STACK_SIZE)
+					{
+						SlaveThreadInfo[iSlave].iDoing = __LINE__;
+						mux_strncpy(SlaveResults[iSlaveResult].host, host, MAX_STRING-1);
+						mux_strncpy(SlaveResults[iSlaveResult].token, token, MAX_STRING-1);
+						mux_strncpy(SlaveResults[iSlaveResult].ident, szIdent, MAX_STRING-1);
+						iSlaveResult++;
+					}
+					else
+					{
+						// The result stack is full, so we just toss
+						// the info and act like it never happened.
+						//
+						SlaveThreadInfo[iSlave].iError = __LINE__;
+					}
+					SlaveThreadInfo[iSlave].iDoing = __LINE__;
+					ReleaseSemaphore(hSlaveResultStackSemaphore, 1, NULL);
+					SlaveThreadInfo[iSlave].iDoing = __LINE__;
+				}
+				else
+				{
+					// The main game thread terminated or the function itself failed,
+					// There isn't much left to do except terminate ourselves.
+					//
+					SlaveThreadInfo[iSlave].iError = __LINE__;
+					return 1;
+				}
+			}
+		}
+	}
+	//SlaveThreadInfo[iSlave].iDoing = __LINE__;
+	//return 1;
 }
 
 static bool bSlaveBooted = false;
 void boot_slave(dbref executor, dbref caller, dbref enactor, int)
 {
-    UNUSED_PARAMETER(executor);
-    UNUSED_PARAMETER(caller);
-    UNUSED_PARAMETER(enactor);
+	UNUSED_PARAMETER(executor);
+	UNUSED_PARAMETER(caller);
+	UNUSED_PARAMETER(enactor);
 
-    int iSlave;
+	int iSlave;
 
-    if (bSlaveBooted) return;
+	if (bSlaveBooted) return;
 
-    hSlaveThreadsSemaphore = CreateSemaphore(NULL, 0, NUM_SLAVE_THREADS, NULL);
-    hSlaveRequestStackSemaphore = CreateSemaphore(NULL, 1, 1, NULL);
-    hSlaveResultStackSemaphore = CreateSemaphore(NULL, 1, 1, NULL);
-    DebugTotalSemaphores += 3;
-    for (iSlave = 0; iSlave < NUM_SLAVE_THREADS; iSlave++)
-    {
-        SlaveThreadInfo[iSlave].iDoing = 0;
-        SlaveThreadInfo[iSlave].iError = 0;
-        CreateThread(NULL, 0, SlaveProc, (LPVOID)iSlave, 0, &SlaveThreadInfo[iSlave].hThreadId);
-        DebugTotalThreads++;
-    }
-    bSlaveBooted = true;
+	hSlaveThreadsSemaphore = CreateSemaphore(NULL, 0, NUM_SLAVE_THREADS, NULL);
+	hSlaveRequestStackSemaphore = CreateSemaphore(NULL, 1, 1, NULL);
+	hSlaveResultStackSemaphore = CreateSemaphore(NULL, 1, 1, NULL);
+	DebugTotalSemaphores += 3;
+	for (iSlave = 0; iSlave < NUM_SLAVE_THREADS; iSlave++)
+	{
+		SlaveThreadInfo[iSlave].iDoing = 0;
+		SlaveThreadInfo[iSlave].iError = 0;
+		CreateThread(NULL, 0, SlaveProc, (LPVOID)iSlave, 0, &SlaveThreadInfo[iSlave].hThreadId);
+		DebugTotalThreads++;
+	}
+	bSlaveBooted = true;
 }
-
 
 static int get_slave_result(void)
 {
-    char host[MAX_STRING];
-    char token[MAX_STRING];
-    char ident[MAX_STRING];
-    char os[MAX_STRING];
-    char userid[MAX_STRING];
-    DESC *d;
-    int local_port, remote_port;
+	char host[MAX_STRING];
+	char token[MAX_STRING];
+	char ident[MAX_STRING];
+	char os[MAX_STRING];
+	char userid[MAX_STRING];
+	DESC *d;
+	int local_port, remote_port;
 
-    // Go take the result off the stack, but not if it takes more
-    // than 5 seconds to do it. Skip it if we time out.
-    //
-    if (WAIT_OBJECT_0 != WaitForSingleObject(hSlaveResultStackSemaphore, 5000))
-    {
-        return 1;
-    }
+	// Go take the result off the stack, but not if it takes more
+	// than 5 seconds to do it. Skip it if we time out.
+	//
+	if (WAIT_OBJECT_0 != WaitForSingleObject(hSlaveResultStackSemaphore, 5000))
+	{
+		return 1;
+	}
 
-    // We have control of the stack. Go back to sleep if the stack is empty.
-    //
-    if (iSlaveResult <= 0)
-    {
-        ReleaseSemaphore(hSlaveResultStackSemaphore, 1, NULL);
-        return 1;
-    }
-    iSlaveResult--;
-    mux_strncpy(host, SlaveResults[iSlaveResult].host, MAX_STRING-1);
-    mux_strncpy(token, SlaveResults[iSlaveResult].token, MAX_STRING-1);
-    mux_strncpy(ident, SlaveResults[iSlaveResult].ident, MAX_STRING-1);
-    ReleaseSemaphore(hSlaveResultStackSemaphore, 1, NULL);
+	// We have control of the stack. Go back to sleep if the stack is empty.
+	//
+	if (iSlaveResult <= 0)
+	{
+		ReleaseSemaphore(hSlaveResultStackSemaphore, 1, NULL);
+		return 1;
+	}
+	iSlaveResult--;
+	mux_strncpy(host, SlaveResults[iSlaveResult].host, MAX_STRING-1);
+	mux_strncpy(token, SlaveResults[iSlaveResult].token, MAX_STRING-1);
+	mux_strncpy(ident, SlaveResults[iSlaveResult].ident, MAX_STRING-1);
+	ReleaseSemaphore(hSlaveResultStackSemaphore, 1, NULL);
 
-    // At this point, we have a host name on our own stack.
-    //
-    if (!mudconf.use_hostname)
-    {
-        return 1;
-    }
-    for (d = descriptor_list; d; d = d->next)
-    {
-        if (strcmp(d->addr, host))
-        {
-            continue;
-        }
+	// At this point, we have a host name on our own stack.
+	//
+	if (!mudconf.use_hostname)
+	{
+		return 1;
+	}
+	for (d = descriptor_list; d; d = d->next)
+	{
+		if (strcmp(d->addr, host))
+		{
+			continue;
+		}
 
-        mux_strncpy(d->addr, token, 50);
-        if (d->player != 0)
-        {
-            if (d->username[0])
-            {
-                atr_add_raw(d->player, A_LASTSITE, tprintf("%s@%s", d->username, d->addr));
-            }
-            else
-            {
-                atr_add_raw(d->player, A_LASTSITE, d->addr);
-            }
-            atr_add_raw(d->player, A_LASTIP, inet_ntoa((d->address).sin_addr));
-        }
-    }
+		mux_strncpy(d->addr, token, 50);
+		if (d->player != 0)
+		{
+			if (d->username[0])
+			{
+				atr_add_raw(d->player, A_LASTSITE, tprintf("%s@%s", d->username, d->addr));
+			}
+			else
+			{
+				atr_add_raw(d->player, A_LASTSITE, d->addr);
+			}
+			atr_add_raw(d->player, A_LASTIP, inet_ntoa((d->address).sin_addr));
+		}
+	}
 
-    if (sscanf(ident, "%d , %d : %s : %s : %s", &remote_port, &local_port, token, os, userid) != 5)
-    {
-        return 1;
-    }
-    for (d = descriptor_list; d; d = d->next)
-    {
-        if (ntohs((d->address).sin_port) != remote_port)
-        {
-            continue;
-        }
+	if (sscanf(ident, "%d , %d : %s : %s : %s", &remote_port, &local_port, token, os, userid) != 5)
+	{
+		return 1;
+	}
+	for (d = descriptor_list; d; d = d->next)
+	{
+		if (ntohs((d->address).sin_port) != remote_port)
+		{
+			continue;
+		}
 
-        mux_strncpy(d->username, userid, 10);
-        if (d->player != 0)
-        {
-            atr_add_raw(d->player, A_LASTSITE, tprintf("%s@%s", d->username, d->addr));
-        }
-    }
-    return 1;
+		mux_strncpy(d->username, userid, 10);
+		if (d->player != 0)
+		{
+			atr_add_raw(d->player, A_LASTSITE, tprintf("%s@%s", d->username, d->addr));
+		}
+	}
+	return 1;
 }
 
 #else // WIN32
-
-void CleanUpSlaveSocket(void)
-{
-    if (!IS_INVALID_SOCKET(slave_socket))
-    {
-        shutdown(slave_socket, SD_BOTH);
-        if (SOCKET_CLOSE(slave_socket) == 0)
-        {
-            DebugTotalSockets--;
-        }
-        slave_socket = INVALID_SOCKET;
-    }
+void CleanUpSlaveSocket(void) {
+	if (!IS_INVALID_SOCKET(slave_socket)) {
+		shutdown(slave_socket, SD_BOTH);
+		if (SOCKET_CLOSE(slave_socket) == 0) {
+			DebugTotalSockets--;
+		}
+		slave_socket = INVALID_SOCKET;
+	}
 }
 
-void CleanUpSlaveProcess(void)
-{
-    if (slave_pid > 0)
-    {
-        kill(slave_pid, SIGKILL);
-        waitpid(slave_pid, NULL, 0);
-    }
-    slave_pid = 0;
+void CleanUpSlaveProcess(void) {
+	if (slave_pid > 0) {
+		kill(slave_pid, SIGKILL);
+		waitpid(slave_pid, NULL, 0);
+	}
+	slave_pid = 0;
 }
 
 #ifdef QUERY_SLAVE
 void CleanUpSQLSlaveSocket(void)
 {
-    if (!IS_INVALID_SOCKET(sqlslave_socket))
-    {
-        shutdown(sqlslave_socket, SD_BOTH);
-        if (SOCKET_CLOSE(sqlslave_socket) == 0)
-        {
-            DebugTotalSockets--;
-        }
-        sqlslave_socket = INVALID_SOCKET;
-    }
+	if (!IS_INVALID_SOCKET(sqlslave_socket))
+	{
+		shutdown(sqlslave_socket, SD_BOTH);
+		if (SOCKET_CLOSE(sqlslave_socket) == 0)
+		{
+			DebugTotalSockets--;
+		}
+		sqlslave_socket = INVALID_SOCKET;
+	}
 }
 
 void CleanUpSQLSlaveProcess(void)
 {
-    if (sqlslave_pid > 0)
-    {
-        kill(sqlslave_pid, SIGKILL);
-        waitpid(sqlslave_pid, NULL, 0);
-    }
-    sqlslave_pid = 0;
+	if (sqlslave_pid > 0)
+	{
+		kill(sqlslave_pid, SIGKILL);
+		waitpid(sqlslave_pid, NULL, 0);
+	}
+	sqlslave_pid = 0;
 }
 
 /*! \brief Lauch query slave process.
@@ -523,118 +513,116 @@ void CleanUpSQLSlaveProcess(void)
 
 void boot_sqlslave(dbref executor, dbref caller, dbref enactor, int)
 {
-    const char *pFailedFunc = NULL;
-    int sv[2];
-    int i;
-    int maxfds;
+	const char *pFailedFunc = NULL;
+	int sv[2];
+	int i;
+	int maxfds;
 
 #ifdef HAVE_GETDTABLESIZE
-    maxfds = getdtablesize();
+	maxfds = getdtablesize();
 #else // HAVE_GETDTABLESIZE
-    maxfds = sysconf(_SC_OPEN_MAX);
+	maxfds = sysconf(_SC_OPEN_MAX);
 #endif // HAVE_GETDTABLESIZE
+	CleanUpSQLSlaveSocket();
+	CleanUpSQLSlaveProcess();
 
-    CleanUpSQLSlaveSocket();
-    CleanUpSQLSlaveProcess();
+	if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0)
+	{
+		pFailedFunc = "socketpair() error: ";
+		goto failure;
+	}
 
-    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0)
-    {
-        pFailedFunc = "socketpair() error: ";
-        goto failure;
-    }
+	// Set to nonblocking.
+	//
+	if (make_nonblocking(sv[0]) < 0)
+	{
+		pFailedFunc = "make_nonblocking() error: ";
+		mux_close(sv[0]);
+		mux_close(sv[1]);
+		goto failure;
+	}
 
-    // Set to nonblocking.
-    //
-    if (make_nonblocking(sv[0]) < 0)
-    {
-        pFailedFunc = "make_nonblocking() error: ";
-        mux_close(sv[0]);
-        mux_close(sv[1]);
-        goto failure;
-    }
+	sqlslave_pid = fork();
+	switch (sqlslave_pid)
+	{
+		case -1:
 
-    sqlslave_pid = fork();
-    switch (sqlslave_pid)
-    {
-    case -1:
+		pFailedFunc = "fork() error: ";
+		mux_close(sv[0]);
+		mux_close(sv[1]);
+		goto failure;
 
-        pFailedFunc = "fork() error: ";
-        mux_close(sv[0]);
-        mux_close(sv[1]);
-        goto failure;
+		case 0:
 
-    case 0:
+		// If we don't clear this alarm, the child will eventually receive a
+		// SIG_PROF.
+		//
+		MuxAlarm.Clear();
 
-        // If we don't clear this alarm, the child will eventually receive a
-        // SIG_PROF.
-        //
-        MuxAlarm.Clear();
+		// Child.  The following calls to dup2() assume only the minimal
+		// dup2() functionality.  That is, the destination descriptor is
+		// always available for it, and sv[1] is never that descriptor.
+		// It is likely that the standard defined behavior of dup2()
+		// would handle the job by itself more directly, but a little
+		// extra code is low-cost insurance.
+		//
+		mux_close(sv[0]);
+		if (sv[1] != 0)
+		{
+			mux_close(0);
+			if (dup2(sv[1], 0) == -1)
+			{
+				_exit(1);
+			}
+		}
+		if (sv[1] != 1)
+		{
+			mux_close(1);
+			if (dup2(sv[1], 1) == -1)
+			{
+				_exit(1);
+			}
+		}
+		for (i = 3; i < maxfds; i++)
+		{
+			mux_close(i);
+		}
+		execlp("bin/sqlslave", "sqlslave", NULL);
+		_exit(1);
+	}
+	mux_close(sv[1]);
 
-        // Child.  The following calls to dup2() assume only the minimal
-        // dup2() functionality.  That is, the destination descriptor is
-        // always available for it, and sv[1] is never that descriptor.
-        // It is likely that the standard defined behavior of dup2()
-        // would handle the job by itself more directly, but a little
-        // extra code is low-cost insurance.
-        //
-        mux_close(sv[0]);
-        if (sv[1] != 0)
-        {
-            mux_close(0);
-            if (dup2(sv[1], 0) == -1)
-            {
-                _exit(1);
-            }
-        }
-        if (sv[1] != 1)
-        {
-            mux_close(1);
-            if (dup2(sv[1], 1) == -1)
-            {
-                _exit(1);
-            }
-        }
-        for (i = 3; i < maxfds; i++)
-        {
-            mux_close(i);
-        }
-        execlp("bin/sqlslave", "sqlslave", NULL);
-        _exit(1);
-    }
-    mux_close(sv[1]);
+	sqlslave_socket = sv[0];
+	DebugTotalSockets++;
+	if (make_nonblocking(sqlslave_socket) < 0)
+	{
+		pFailedFunc = "make_nonblocking() error: ";
+		CleanUpSQLSlaveSocket();
+		goto failure;
+	}
+	if ( !IS_INVALID_SOCKET(sqlslave_socket)
+			&& maxd <= sqlslave_socket)
+	{
+		maxd = sqlslave_socket + 1;
+	}
 
-    sqlslave_socket = sv[0];
-    DebugTotalSockets++;
-    if (make_nonblocking(sqlslave_socket) < 0)
-    {
-        pFailedFunc = "make_nonblocking() error: ";
-        CleanUpSQLSlaveSocket();
-        goto failure;
-    }
-    if (  !IS_INVALID_SOCKET(sqlslave_socket)
-       && maxd <= sqlslave_socket)
-    {
-        maxd = sqlslave_socket + 1;
-    }
+	STARTLOG(LOG_ALWAYS, "NET", "QUERY");
+	log_text("SQL slave started on fd ");
+	log_number(sqlslave_socket);
+	ENDLOG;
 
-    STARTLOG(LOG_ALWAYS, "NET", "QUERY");
-    log_text("SQL slave started on fd ");
-    log_number(sqlslave_socket);
-    ENDLOG;
+	mux_write(sqlslave_socket, "PING", 4);
+	return;
 
-    mux_write(sqlslave_socket, "PING", 4);
-    return;
+	failure:
 
-failure:
-
-    CleanUpSQLSlaveProcess();
-    STARTLOG(LOG_ALWAYS, "NET", "SQL");
-    log_text(pFailedFunc);
-    log_number(errno);
-    ENDLOG;
+	CleanUpSQLSlaveProcess();
+	STARTLOG(LOG_ALWAYS, "NET", "SQL");
+	log_text(pFailedFunc);
+	log_number(errno);
+	ENDLOG;
 }
 #endif // QUERY_SLAVE
-
 /*! \brief Lauch reverse-DNS slave process.
  *
  * This spawns the reverse-DNS slave process and creates a socket-oriented,
@@ -647,114 +635,103 @@ failure:
  * \return         None.
  */
 
-void boot_slave(dbref executor, dbref caller, dbref enactor, int)
-{
-    const char *pFailedFunc = 0;
-    int sv[2];
-    int i;
-    int maxfds;
+void boot_slave(dbref executor, dbref caller, dbref enactor, int) {
+	const char *pFailedFunc = 0;
+	int sv[2];
+	int i;
+	int maxfds;
 
 #ifdef HAVE_GETDTABLESIZE
-    maxfds = getdtablesize();
+	maxfds = getdtablesize();
 #else // HAVE_GETDTABLESIZE
-    maxfds = sysconf(_SC_OPEN_MAX);
+	maxfds = sysconf(_SC_OPEN_MAX);
 #endif // HAVE_GETDTABLESIZE
+	CleanUpSlaveSocket();
+	CleanUpSlaveProcess();
 
-    CleanUpSlaveSocket();
-    CleanUpSlaveProcess();
+	if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0) {
+		pFailedFunc = "socketpair() error: ";
+		goto failure;
+	}
 
-    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0)
-    {
-        pFailedFunc = "socketpair() error: ";
-        goto failure;
-    }
+	// Set to nonblocking.
+	//
+	if (make_nonblocking(sv[0]) < 0) {
+		pFailedFunc = "make_nonblocking() error: ";
+		mux_close(sv[0]);
+		mux_close(sv[1]);
+		goto failure;
+	}
+	slave_pid = fork();
+	switch (slave_pid) {
+	case -1:
 
-    // Set to nonblocking.
-    //
-    if (make_nonblocking(sv[0]) < 0)
-    {
-        pFailedFunc = "make_nonblocking() error: ";
-        mux_close(sv[0]);
-        mux_close(sv[1]);
-        goto failure;
-    }
-    slave_pid = fork();
-    switch (slave_pid)
-    {
-    case -1:
+		pFailedFunc = "fork() error: ";
+		mux_close(sv[0]);
+		mux_close(sv[1]);
+		goto failure;
 
-        pFailedFunc = "fork() error: ";
-        mux_close(sv[0]);
-        mux_close(sv[1]);
-        goto failure;
+	case 0:
 
-    case 0:
+		// If we don't clear this alarm, the child will eventually receive a
+		// SIG_PROF.
+		//
+		MuxAlarm.Clear();
 
-        // If we don't clear this alarm, the child will eventually receive a
-        // SIG_PROF.
-        //
-        MuxAlarm.Clear();
+		// Child.  The following calls to dup2() assume only the minimal
+		// dup2() functionality.  That is, the destination descriptor is
+		// always available for it, and sv[1] is never that descriptor.
+		// It is likely that the standard defined behavior of dup2()
+		// would handle the job by itself more directly, but a little
+		// extra code is low-cost insurance.
+		//
+		mux_close(sv[0]);
+		if (sv[1] != 0) {
+			mux_close(0);
+			if (dup2(sv[1], 0) == -1) {
+				_exit(1);
+			}
+		}
+		if (sv[1] != 1) {
+			mux_close(1);
+			if (dup2(sv[1], 1) == -1) {
+				_exit(1);
+			}
+		}
+		for (i = 3; i < maxfds; i++) {
+			mux_close(i);
+		}
+		execlp("bin/slave", "slave", NULL);
+		_exit(1);
+	}
+	close(sv[1]);
 
-        // Child.  The following calls to dup2() assume only the minimal
-        // dup2() functionality.  That is, the destination descriptor is
-        // always available for it, and sv[1] is never that descriptor.
-        // It is likely that the standard defined behavior of dup2()
-        // would handle the job by itself more directly, but a little
-        // extra code is low-cost insurance.
-        //
-        mux_close(sv[0]);
-        if (sv[1] != 0)
-        {
-            mux_close(0);
-            if (dup2(sv[1], 0) == -1)
-            {
-                _exit(1);
-            }
-        }
-        if (sv[1] != 1)
-        {
-            mux_close(1);
-            if (dup2(sv[1], 1) == -1)
-            {
-                _exit(1);
-            }
-        }
-        for (i = 3; i < maxfds; i++)
-        {
-            mux_close(i);
-        }
-        execlp("bin/slave", "slave", NULL);
-        _exit(1);
-    }
-    close(sv[1]);
+	slave_socket = sv[0];
+	DebugTotalSockets++;
+	if (make_nonblocking(slave_socket) < 0) {
+		pFailedFunc = "make_nonblocking() error: ";
+		CleanUpSlaveSocket();
+		goto failure;
+	}
+	if (!IS_INVALID_SOCKET(slave_socket) && maxd <= slave_socket) {
+		maxd = slave_socket + 1;
+	}
 
-    slave_socket = sv[0];
-    DebugTotalSockets++;
-    if (make_nonblocking(slave_socket) < 0)
-    {
-        pFailedFunc = "make_nonblocking() error: ";
-        CleanUpSlaveSocket();
-        goto failure;
-    }
-    if (  !IS_INVALID_SOCKET(slave_socket)
-       && maxd <= slave_socket)
-    {
-        maxd = slave_socket + 1;
-    }
+	STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
+	log_text("DNS lookup slave started on fd ");
+	log_number(slave_socket);
+	ENDLOG
+	;
+	return;
 
-    STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
-    log_text("DNS lookup slave started on fd ");
-    log_number(slave_socket);
-    ENDLOG;
-    return;
+	failure:
 
-failure:
-
-    CleanUpSlaveProcess();
-    STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
-    log_text(pFailedFunc);
-    log_number(errno);
-    ENDLOG;
+	CleanUpSlaveProcess();
+	STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
+	log_text(pFailedFunc);
+	log_number(errno);
+	ENDLOG
+	;
 }
 
 #ifdef QUERY_SLAVE
@@ -768,386 +745,343 @@ failure:
 
 static int get_sqlslave_result(void)
 {
-    char buf[LBUF_SIZE];
+	char buf[LBUF_SIZE];
 
-    int len = mux_read(sqlslave_socket, buf, sizeof(buf)-1);
-    if (len < 0)
-    {
-        int iSocketError = SOCKET_LAST_ERROR;
-        if (  iSocketError == SOCKET_EAGAIN
-           || iSocketError == SOCKET_EWOULDBLOCK)
-        {
-            return -1;
-        }
-        CleanUpSQLSlaveSocket();
-        CleanUpSQLSlaveProcess();
+	int len = mux_read(sqlslave_socket, buf, sizeof(buf)-1);
+	if (len < 0)
+	{
+		int iSocketError = SOCKET_LAST_ERROR;
+		if ( iSocketError == SOCKET_EAGAIN
+				|| iSocketError == SOCKET_EWOULDBLOCK)
+		{
+			return -1;
+		}
+		CleanUpSQLSlaveSocket();
+		CleanUpSQLSlaveProcess();
 
-        STARTLOG(LOG_ALWAYS, "NET", "QUERY");
-        log_text("read() of query slave failed. Query Slave stopped.");
-        ENDLOG;
+		STARTLOG(LOG_ALWAYS, "NET", "QUERY");
+		log_text("read() of query slave failed. Query Slave stopped.");
+		ENDLOG;
 
-        return -1;
-    }
-    else if (len == 0)
-    {
-        return -1;
-    }
-    buf[len] = '\0';
+		return -1;
+	}
+	else if (len == 0)
+	{
+		return -1;
+	}
+	buf[len] = '\0';
 
-    STARTLOG(LOG_ALWAYS, "NET", "QUERY");
-    log_text(buf);
-    ENDLOG;
+	STARTLOG(LOG_ALWAYS, "NET", "QUERY");
+	log_text(buf);
+	ENDLOG;
 
-    return 0;
+	return 0;
 }
 
 #endif // QUERY_SLAVE
-
 // Get a result from the slave
 //
-static int get_slave_result(void)
-{
-    int local_port, remote_port;
-    DESC *d;
+static int get_slave_result(void) {
+	int local_port, remote_port;
+	DESC *d;
 
-    char *buf = alloc_lbuf("slave_buf");
+	char *buf = alloc_lbuf("slave_buf");
 
-    int len = mux_read(slave_socket, buf, LBUF_SIZE-1);
-    if (len < 0)
-    {
-        int iSocketError = SOCKET_LAST_ERROR;
-        if (  iSocketError == SOCKET_EAGAIN
-           || iSocketError == SOCKET_EWOULDBLOCK)
-        {
-            free_lbuf(buf);
-            return -1;
-        }
-        CleanUpSlaveSocket();
-        CleanUpSlaveProcess();
-        free_lbuf(buf);
+	int len = mux_read(slave_socket, buf, LBUF_SIZE - 1);
+	if (len < 0) {
+		int iSocketError = SOCKET_LAST_ERROR;
+		if (iSocketError == SOCKET_EAGAIN || iSocketError == SOCKET_EWOULDBLOCK) {
+			free_lbuf(buf);
+			return -1;
+		}
+		CleanUpSlaveSocket();
+		CleanUpSlaveProcess();
+		free_lbuf(buf);
 
-        STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
-        log_text("read() of slave result failed. Slave stopped.");
-        ENDLOG;
+		STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
+		log_text("read() of slave result failed. Slave stopped.");
+		ENDLOG
+		;
 
-        return -1;
-    }
-    else if (len == 0)
-    {
-        free_lbuf(buf);
-        return -1;
-    }
-    buf[len] = '\0';
+		return -1;
+	} else if (len == 0) {
+		free_lbuf(buf);
+		return -1;
+	}
+	buf[len] = '\0';
 
-    char *token = alloc_lbuf("slave_token");
-    char *os = alloc_lbuf("slave_os");
-    char *userid = alloc_lbuf("slave_userid");
-    char *host = alloc_lbuf("slave_host");
-    char *p;
-    if (sscanf(buf, "%s %s", host, token) != 2)
-    {
-        goto Done;
-    }
-    p = strchr(buf, '\n');
-    if (!p)
-    {
-        goto Done;
-    }
-    *p = '\0';
-    if (mudconf.use_hostname)
-    {
-        for (d = descriptor_list; d; d = d->next)
-        {
-            if (strcmp(d->addr, host) != 0)
-            {
-                continue;
-            }
+	char *token = alloc_lbuf("slave_token");
+	char *os = alloc_lbuf("slave_os");
+	char *userid = alloc_lbuf("slave_userid");
+	char *host = alloc_lbuf("slave_host");
+	char *p;
+	if (sscanf(buf, "%s %s", host, token) != 2) {
+		goto Done;
+	}
+	p = strchr(buf, '\n');
+	if (!p) {
+		goto Done;
+	}
+	*p = '\0';
+	if (mudconf.use_hostname) {
+		for (d = descriptor_list; d; d = d->next) {
+			if (strcmp(d->addr, host) != 0) {
+				continue;
+			}
 
-            strncpy(d->addr, token, 50);
-            d->addr[50] = '\0';
-            if (d->player != 0)
-            {
-                if (d->username[0])
-                {
-                    atr_add_raw(d->player, A_LASTSITE, tprintf("%s@%s",
-                        d->username, d->addr));
-                }
-                else
-                {
-                    atr_add_raw(d->player, A_LASTSITE, d->addr);
-                }
-                atr_add_raw(d->player, A_LASTIP, inet_ntoa((d->address).sin_addr));
-            }
-        }
-    }
+			strncpy(d->addr, token, 50);
+			d->addr[50] = '\0';
+			if (d->player != 0) {
+				if (d->username[0]) {
+					atr_add_raw(d->player, A_LASTSITE,
+							tprintf("%s@%s", d->username, d->addr));
+				} else {
+					atr_add_raw(d->player, A_LASTSITE, d->addr);
+				}
+				atr_add_raw(d->player, A_LASTIP,
+						inet_ntoa((d->address).sin_addr));
+			}
+		}
+	}
 
-    if (sscanf(p + 1, "%s %d , %d : %s : %s : %s",
-           host,
-           &remote_port, &local_port,
-           token, os, userid) != 6)
-    {
-        goto Done;
-    }
-    for (d = descriptor_list; d; d = d->next)
-    {
-        if (ntohs((d->address).sin_port) != remote_port)
-            continue;
-        strncpy(d->username, userid, 10);
-        d->username[10] = '\0';
-        if (d->player != 0)
-        {
-            atr_add_raw(d->player, A_LASTSITE, tprintf("%s@%s",
-                             d->username, d->addr));
-        }
-    }
-Done:
-    free_lbuf(buf);
-    free_lbuf(token);
-    free_lbuf(os);
-    free_lbuf(userid);
-    free_lbuf(host);
-    return 0;
+	if (sscanf(p + 1, "%s %d , %d : %s : %s : %s", host, &remote_port,
+			&local_port, token, os, userid) != 6) {
+		goto Done;
+	}
+	for (d = descriptor_list; d; d = d->next) {
+		if (ntohs((d->address).sin_port) != remote_port)
+			continue;
+		strncpy(d->username, userid, 10);
+		d->username[10] = '\0';
+		if (d->player != 0) {
+			atr_add_raw(d->player, A_LASTSITE,
+					tprintf("%s@%s", d->username, d->addr));
+		}
+	}
+	Done:
+	free_lbuf(buf);
+	free_lbuf(token);
+	free_lbuf(os);
+	free_lbuf(userid);
+	free_lbuf(host);
+	return 0;
 }
 #endif // WIN32
+static void make_socket(PortInfo *Port) {
+	SOCKET s;
+	struct sockaddr_in server;
+	int opt = 1;
 
-static void make_socket(PortInfo *Port)
-{
-    SOCKET s;
-    struct sockaddr_in server;
-    int opt = 1;
-
-    Port->socket = INVALID_SOCKET;
+	Port->socket = INVALID_SOCKET;
 
 #ifdef WIN32
 
-    // If we are running Windows NT we must create a completion port,
-    // and start up a listening thread for new connections
-    //
-    if (bUseCompletionPorts)
-    {
-        int nRet;
+	// If we are running Windows NT we must create a completion port,
+	// and start up a listening thread for new connections
+	//
+	if (bUseCompletionPorts)
+	{
+		int nRet;
 
-        // create initial IO completion port, so threads have something to wait on
-        //
-        CompletionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+		// create initial IO completion port, so threads have something to wait on
+		//
+		CompletionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
 
-        if (!CompletionPort)
-        {
-            Log.tinyprintf("Error %ld on CreateIoCompletionPort" ENDLINE,  GetLastError());
-            return;
-        }
+		if (!CompletionPort)
+		{
+			Log.tinyprintf("Error %ld on CreateIoCompletionPort" ENDLINE, GetLastError());
+			return;
+		}
 
-        // Initialize the critical section
-        //
-        if (!bDescriptorListInit)
-        {
-            InitializeCriticalSection(&csDescriptorList);
-            bDescriptorListInit = true;
-        }
+		// Initialize the critical section
+		//
+		if (!bDescriptorListInit)
+		{
+			InitializeCriticalSection(&csDescriptorList);
+			bDescriptorListInit = true;
+		}
 
-        // Create a TCP/IP stream socket
-        //
-        s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (IS_INVALID_SOCKET(s))
-        {
-            log_perror("NET", "FAIL", NULL, "creating master socket");
-            return;
-        }
+		// Create a TCP/IP stream socket
+		//
+		s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		if (IS_INVALID_SOCKET(s))
+		{
+			log_perror("NET", "FAIL", NULL, "creating master socket");
+			return;
+		}
 
-        DebugTotalSockets++;
-        if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt)) < 0)
-        {
-            log_perror("NET", "FAIL", NULL, "setsockopt");
-        }
+		DebugTotalSockets++;
+		if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt)) < 0)
+		{
+			log_perror("NET", "FAIL", NULL, "setsockopt");
+		}
 
-        // Fill in the the address structure
-        //
-        server.sin_port = htons((unsigned short)(Port->port));
-        server.sin_family = AF_INET;
-        server.sin_addr.s_addr = INADDR_ANY;
+		// Fill in the the address structure
+		//
+		server.sin_port = htons((unsigned short)(Port->port));
+		server.sin_family = AF_INET;
+		server.sin_addr.s_addr = INADDR_ANY;
 
-        // bind our name to the socket
-        //
-        nRet = bind(s, (LPSOCKADDR) &server, sizeof server);
+		// bind our name to the socket
+		//
+		nRet = bind(s, (LPSOCKADDR) &server, sizeof server);
 
-        if (IS_SOCKET_ERROR(nRet))
-        {
-            Log.tinyprintf("Error %ld on bind" ENDLINE, SOCKET_LAST_ERROR);
-            if (SOCKET_CLOSE(s) == 0)
-            {
-                DebugTotalSockets--;
-            }
-            s = INVALID_SOCKET;
-            return;
-        }
+		if (IS_SOCKET_ERROR(nRet))
+		{
+			Log.tinyprintf("Error %ld on bind" ENDLINE, SOCKET_LAST_ERROR);
+			if (SOCKET_CLOSE(s) == 0)
+			{
+				DebugTotalSockets--;
+			}
+			s = INVALID_SOCKET;
+			return;
+		}
 
-        // Set the socket to listen
-        //
-        nRet = listen(s, SOMAXCONN);
+		// Set the socket to listen
+		//
+		nRet = listen(s, SOMAXCONN);
 
-        if (nRet)
-        {
-            Log.tinyprintf("Error %ld on listen" ENDLINE, SOCKET_LAST_ERROR);
-            if (SOCKET_CLOSE(s) == 0)
-            {
-                DebugTotalSockets--;
-            }
-            s = INVALID_SOCKET;
-            return;
-        }
+		if (nRet)
+		{
+			Log.tinyprintf("Error %ld on listen" ENDLINE, SOCKET_LAST_ERROR);
+			if (SOCKET_CLOSE(s) == 0)
+			{
+				DebugTotalSockets--;
+			}
+			s = INVALID_SOCKET;
+			return;
+		}
 
-        // Create the MUD listening thread
-        //
-        HANDLE hThread = CreateThread(NULL, 0, MUDListenThread, (LPVOID)Port, 0, NULL);
-        if (NULL == hThread)
-        {
-            log_perror("NET", "FAIL", "CreateThread", "setsockopt");
-            if (SOCKET_CLOSE(s) == 0)
-            {
-                DebugTotalSockets--;
-            }
-            s = INVALID_SOCKET;
-            return;
-        }
+		// Create the MUD listening thread
+		//
+		HANDLE hThread = CreateThread(NULL, 0, MUDListenThread, (LPVOID)Port, 0, NULL);
+		if (NULL == hThread)
+		{
+			log_perror("NET", "FAIL", "CreateThread", "setsockopt");
+			if (SOCKET_CLOSE(s) == 0)
+			{
+				DebugTotalSockets--;
+			}
+			s = INVALID_SOCKET;
+			return;
+		}
 
-        Port->socket = s;
-        Log.tinyprintf("Listening (NT-style) on port %d" ENDLINE, Port->port);
-        return;
-    }
+		Port->socket = s;
+		Log.tinyprintf("Listening (NT-style) on port %d" ENDLINE, Port->port);
+		return;
+	}
 #endif // WIN32
+	s = socket(AF_INET, SOCK_STREAM, 0);
+	if (IS_INVALID_SOCKET(s)) {
+		log_perror("NET", "FAIL", NULL, "creating master socket");
+		return;
+	}
 
-    s = socket(AF_INET, SOCK_STREAM, 0);
-    if (IS_INVALID_SOCKET(s))
-    {
-        log_perror("NET", "FAIL", NULL, "creating master socket");
-        return;
-    }
+	DebugTotalSockets++;
+	if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *) &opt, sizeof(opt))
+			< 0) {
+		log_perror("NET", "FAIL", NULL, "setsockopt");
+	}
 
-    DebugTotalSockets++;
-    if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt)) < 0)
-    {
-        log_perror("NET", "FAIL", NULL, "setsockopt");
-    }
+	server.sin_family = AF_INET;
+	server.sin_addr.s_addr = INADDR_ANY;
+	server.sin_port = htons((unsigned short) (Port->port));
 
-    server.sin_family = AF_INET;
-    server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_port = htons((unsigned short)(Port->port));
+	int cc = bind(s, (struct sockaddr *) &server, sizeof(server));
+	if (IS_SOCKET_ERROR(cc)) {
+		log_perror("NET", "FAIL", NULL, "bind");
+		if (SOCKET_CLOSE(s) == 0) {
+			DebugTotalSockets--;
+		}
+		s = INVALID_SOCKET;
+		return;
+	}
 
-    int cc  = bind(s, (struct sockaddr *)&server, sizeof(server));
-    if (IS_SOCKET_ERROR(cc))
-    {
-        log_perror("NET", "FAIL", NULL, "bind");
-        if (SOCKET_CLOSE(s) == 0)
-        {
-            DebugTotalSockets--;
-        }
-        s = INVALID_SOCKET;
-        return;
-    }
-
-    listen(s, SOMAXCONN);
-    Port->socket = s;
-    Log.tinyprintf("Listening on port %d" ENDLINE, Port->port);
+	listen(s, SOMAXCONN);
+	Port->socket = s;
+	Log.tinyprintf("Listening on port %d" ENDLINE, Port->port);
 }
 
 #ifndef WIN32
 
-bool ValidSocket(SOCKET s)
-{
-    struct stat fstatbuf;
-    if (fstat(s, &fstatbuf) < 0)
-    {
-        return false;
-    }
-    return true;
+bool ValidSocket(SOCKET s) {
+	struct stat fstatbuf;
+	if (fstat(s, &fstatbuf) < 0) {
+		return false;
+	}
+	return true;
 }
 
 #endif // WIN32
+void SetupPorts(int *pnPorts, PortInfo aPorts[], IntArray *pia) {
+	// Any existing open port which does not appear in the requested set
+	// should be closed.
+	//
+	int i, j, k;
+	bool bFound;
+	for (i = 0; i < *pnPorts; i++) {
+		bFound = false;
+		for (j = 0; j < pia->n; j++) {
+			if (aPorts[i].port == pia->pi[j]) {
+				bFound = true;
+				break;
+			}
+		}
 
-void SetupPorts(int *pnPorts, PortInfo aPorts[], IntArray *pia)
-{
-    // Any existing open port which does not appear in the requested set
-    // should be closed.
-    //
-    int i, j, k;
-    bool bFound;
-    for (i = 0; i < *pnPorts; i++)
-    {
-        bFound = false;
-        for (j = 0; j < pia->n; j++)
-        {
-            if (aPorts[i].port == pia->pi[j])
-            {
-                bFound = true;
-                break;
-            }
-        }
+		if (!bFound) {
+			if (SOCKET_CLOSE(aPorts[i].socket) == 0) {
+				DebugTotalSockets--;
+				(*pnPorts)--;
+				k = *pnPorts;
+				if (i != k) {
+					aPorts[i] = aPorts[k];
+				}
+				aPorts[k].port = 0;
+				aPorts[k].socket = INVALID_SOCKET;
+			}
+		}
+	}
 
-        if (!bFound)
-        {
-            if (SOCKET_CLOSE(aPorts[i].socket) == 0)
-            {
-                DebugTotalSockets--;
-                (*pnPorts)--;
-                k = *pnPorts;
-                if (i != k)
-                {
-                    aPorts[i] = aPorts[k];
-                }
-                aPorts[k].port = 0;
-                aPorts[k].socket = INVALID_SOCKET;
-            }
-        }
-    }
+	// Any requested port which does not appear in the existing open set
+	// of ports should be opened.
+	//
+	for (j = 0; j < pia->n; j++) {
+		bFound = false;
+		for (i = 0; i < *pnPorts; i++) {
+			if (aPorts[i].port == pia->pi[j]) {
+				bFound = true;
+				break;
+			}
+		}
 
-    // Any requested port which does not appear in the existing open set
-    // of ports should be opened.
-    //
-    for (j = 0; j < pia->n; j++)
-    {
-        bFound = false;
-        for (i = 0; i < *pnPorts; i++)
-        {
-            if (aPorts[i].port == pia->pi[j])
-            {
-                bFound = true;
-                break;
-            }
-        }
-
-        if (!bFound)
-        {
-            k = *pnPorts;
-            aPorts[k].port = pia->pi[j];
-            make_socket(&aPorts[k]);
-            if (  !IS_INVALID_SOCKET(aPorts[k].socket)
+		if (!bFound) {
+			k = *pnPorts;
+			aPorts[k].port = pia->pi[j];
+			make_socket(&aPorts[k]);
+			if (!IS_INVALID_SOCKET(aPorts[k].socket)
 #ifndef WIN32
-               && ValidSocket(aPorts[k].socket)
+					&& ValidSocket(aPorts[k].socket)
 #endif // WIN32
-               )
-            {
+							) {
 #ifndef WIN32
-                if (maxd <= aPorts[k].socket)
-                {
-                    maxd = aPorts[k].socket + 1;
-                }
+				if (maxd <= aPorts[k].socket) {
+					maxd = aPorts[k].socket + 1;
+				}
 #endif // WIN32
-                (*pnPorts)++;
-            }
-        }
-    }
+				(*pnPorts)++;
+			}
+		}
+	}
 
-    // If we were asked to listen on at least one port, but we aren't
-    // listening to at least one port, we should bring the game down.
-    //
-    if (  0 < pia->n
-       && 0 == *pnPorts)
-    {
+	// If we were asked to listen on at least one port, but we aren't
+	// listening to at least one port, we should bring the game down.
+	//
+	if (0 < pia->n && 0 == *pnPorts) {
 #ifdef WIN32
-        WSACleanup();
+		WSACleanup();
 #endif // WIN32
-        exit(1);
-    }
+		exit(1);
+	}
 }
 
 #ifdef WIN32
@@ -1161,1229 +1095,1156 @@ void SetupPorts(int *pnPorts, PortInfo aPorts[], IntArray *pia)
 //
 DCL_INLINE bool FD_ISSET_priv(SOCKET fd, fd_set *set)
 {
-    unsigned int i;
-    for (i = 0; i < set->fd_count; i++)
-    {
-        if (set->fd_array[i] == fd)
-        {
-            return true;
-        }
-    }
-    return false;
+	unsigned int i;
+	for (i = 0; i < set->fd_count; i++)
+	{
+		if (set->fd_array[i] == fd)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 DCL_INLINE void FD_ZERO_priv(fd_set *set)
 {
-    set->fd_count = 0;
+	set->fd_count = 0;
 }
 
 DCL_INLINE void FD_SET_priv(SOCKET fd, fd_set *set)
 {
-    if (set->fd_count < FD_SETSIZE)
-    {
-        set->fd_array[set->fd_count++] = fd;
-    }
+	if (set->fd_count < FD_SETSIZE)
+	{
+		set->fd_array[set->fd_count++] = fd;
+	}
 }
 
 void shovechars9x(int nPorts, PortInfo aPorts[])
 {
-    fd_set input_set, output_set;
-    int found;
-    DESC *d, *dnext, *newd;
+	fd_set input_set, output_set;
+	int found;
+	DESC *d, *dnext, *newd;
 
 #define CheckInput(x)   FD_ISSET_priv(x, &input_set)
 #define CheckOutput(x)  FD_ISSET_priv(x, &output_set)
 
-    mudstate.debug_cmd = "< shovechars >";
+	mudstate.debug_cmd = "< shovechars >";
 
-    CLinearTimeAbsolute ltaLastSlice;
-    ltaLastSlice.GetUTC();
+	CLinearTimeAbsolute ltaLastSlice;
+	ltaLastSlice.GetUTC();
 
-    while (mudstate.shutdown_flag == 0)
-    {
-        CLinearTimeAbsolute ltaCurrent;
-        ltaCurrent.GetUTC();
-        update_quotas(ltaLastSlice, ltaCurrent);
+	while (mudstate.shutdown_flag == 0)
+	{
+		CLinearTimeAbsolute ltaCurrent;
+		ltaCurrent.GetUTC();
+		update_quotas(ltaLastSlice, ltaCurrent);
 
-        // Before processing a possible QUIT command, be sure to give the slave
-        // a chance to report it's findings.
-        //
-        if (iSlaveResult) get_slave_result();
+		// Before processing a possible QUIT command, be sure to give the slave
+		// a chance to report it's findings.
+		//
+		if (iSlaveResult) get_slave_result();
 
-        // Check the scheduler. Run a little ahead into the future so that
-        // we tend to sleep longer.
-        //
-        scheduler.RunTasks(ltaCurrent);
-        CLinearTimeAbsolute ltaWakeUp;
-        if (!scheduler.WhenNext(&ltaWakeUp))
-        {
-            CLinearTimeDelta ltd = time_30m;
-            ltaWakeUp = ltaCurrent + ltd;
-        }
-        else if (ltaWakeUp < ltaCurrent)
-        {
-            ltaWakeUp = ltaCurrent;
-        }
+		// Check the scheduler. Run a little ahead into the future so that
+		// we tend to sleep longer.
+		//
+		scheduler.RunTasks(ltaCurrent);
+		CLinearTimeAbsolute ltaWakeUp;
+		if (!scheduler.WhenNext(&ltaWakeUp))
+		{
+			CLinearTimeDelta ltd = time_30m;
+			ltaWakeUp = ltaCurrent + ltd;
+		}
+		else if (ltaWakeUp < ltaCurrent)
+		{
+			ltaWakeUp = ltaCurrent;
+		}
 
-        if (mudstate.shutdown_flag)
-        {
-            break;
-        }
+		if (mudstate.shutdown_flag)
+		{
+			break;
+		}
 
-        FD_ZERO_priv(&input_set);
-        FD_ZERO_priv(&output_set);
+		FD_ZERO_priv(&input_set);
+		FD_ZERO_priv(&output_set);
 
-        // Listen for new connections.
-        //
-        int i;
-        for (i = 0; i < nPorts; i++)
-        {
-            FD_SET_priv(aPorts[i].socket, &input_set);
-        }
+		// Listen for new connections.
+		//
+		int i;
+		for (i = 0; i < nPorts; i++)
+		{
+			FD_SET_priv(aPorts[i].socket, &input_set);
+		}
 
-        // Mark sockets that we want to test for change in status.
-        //
-        DESC_ITER_ALL(d)
-        {
-            if (!d->input_head)
-            {
-                FD_SET_priv(d->descriptor, &input_set);
-            }
-            if (d->output_head)
-            {
-                FD_SET_priv(d->descriptor, &output_set);
-            }
-        }
+		// Mark sockets that we want to test for change in status.
+		//
+		DESC_ITER_ALL(d)
+		{
+			if (!d->input_head)
+			{
+				FD_SET_priv(d->descriptor, &input_set);
+			}
+			if (d->output_head)
+			{
+				FD_SET_priv(d->descriptor, &output_set);
+			}
+		}
 
-        // Wait for something to happen
-        //
-        struct timeval timeout;
-        CLinearTimeDelta ltdTimeout = ltaWakeUp - ltaCurrent;
-        ltdTimeout.ReturnTimeValueStruct(&timeout);
-        found = select(0, &input_set, &output_set, (fd_set *) NULL, &timeout);
+		// Wait for something to happen
+		//
+		struct timeval timeout;
+		CLinearTimeDelta ltdTimeout = ltaWakeUp - ltaCurrent;
+		ltdTimeout.ReturnTimeValueStruct(&timeout);
+		found = select(0, &input_set, &output_set, (fd_set *) NULL, &timeout);
 
-        switch (found)
-        {
-        case SOCKET_ERROR:
-            {
-                STARTLOG(LOG_NET, "NET", "CONN");
-                log_text("shovechars: Socket error.");
-                ENDLOG;
-            }
+		switch (found)
+		{
+			case SOCKET_ERROR:
+			{
+				STARTLOG(LOG_NET, "NET", "CONN");
+				log_text("shovechars: Socket error.");
+				ENDLOG;
+			}
 
-        case 0:
-            continue;
-        }
+			case 0:
+			continue;
+		}
 
-        // Check for new connection requests.
-        //
-        for (i = 0; i < nPorts; i++)
-        {
-            if (CheckInput(aPorts[i].socket))
-            {
-                int iSocketError;
-                newd = new_connection(aPorts+i, &iSocketError);
-                if (!newd)
-                {
-                    if (  iSocketError
-                       && iSocketError != SOCKET_EINTR)
-                    {
-                        log_perror("NET", "FAIL", NULL, "new_connection");
-                    }
-                }
-            }
-        }
+		// Check for new connection requests.
+		//
+		for (i = 0; i < nPorts; i++)
+		{
+			if (CheckInput(aPorts[i].socket))
+			{
+				int iSocketError;
+				newd = new_connection(aPorts+i, &iSocketError);
+				if (!newd)
+				{
+					if ( iSocketError
+							&& iSocketError != SOCKET_EINTR)
+					{
+						log_perror("NET", "FAIL", NULL, "new_connection");
+					}
+				}
+			}
+		}
 
-        // Check for activity on user sockets
-        //
-        DESC_SAFEITER_ALL(d, dnext)
-        {
-            // Process input from sockets with pending input
-            //
-            if (CheckInput(d->descriptor))
-            {
-                // Undo autodark
-                //
-                if (d->flags & DS_AUTODARK)
-                {
-                    // Clear the DS_AUTODARK on every related session.
-                    //
-                    DESC *d1;
-                    DESC_ITER_PLAYER(d->player, d1)
-                    {
-                        d1->flags &= ~DS_AUTODARK;
-                    }
-                    db[d->player].fs.word[FLAG_WORD1] &= ~DARK;
-                }
+		// Check for activity on user sockets
+		//
+		DESC_SAFEITER_ALL(d, dnext)
+		{
+			// Process input from sockets with pending input
+			//
+			if (CheckInput(d->descriptor))
+			{
+				// Undo autodark
+				//
+				if (d->flags & DS_AUTODARK)
+				{
+					// Clear the DS_AUTODARK on every related session.
+					//
+					DESC *d1;
+					DESC_ITER_PLAYER(d->player, d1)
+					{
+						d1->flags &= ~DS_AUTODARK;
+					}
+					db[d->player].fs.word[FLAG_WORD1] &= ~DARK;
+				}
 
-                // Process received data
-                //
-                if (!process_input(d))
-                {
-                    shutdownsock(d, R_SOCKDIED);
-                    continue;
-                }
-            }
+				// Process received data
+				//
+				if (!process_input(d))
+				{
+					shutdownsock(d, R_SOCKDIED);
+					continue;
+				}
+			}
 
-            // Process output for sockets with pending output
-            //
-            if (CheckOutput(d->descriptor))
-            {
-                process_output9x(d, true);
-            }
-        }
-    }
+			// Process output for sockets with pending output
+			//
+			if (CheckOutput(d->descriptor))
+			{
+				process_output9x(d, true);
+			}
+		}
+	}
 }
 
 static LRESULT WINAPI mux_WindowProc
 (
-    HWND   hWin,
-    UINT   msg,
-    WPARAM wParam,
-    LPARAM lParam
+		HWND hWin,
+		UINT msg,
+		WPARAM wParam,
+		LPARAM lParam
 )
 {
-    switch (msg)
-    {
-    case WM_CLOSE:
-        mudstate.shutdown_flag = true;
-        PostQueuedCompletionStatus(CompletionPort, 0, 0, &lpo_wakeup);
-        return 0;
+	switch (msg)
+	{
+		case WM_CLOSE:
+		mudstate.shutdown_flag = true;
+		PostQueuedCompletionStatus(CompletionPort, 0, 0, &lpo_wakeup);
+		return 0;
 
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
-    }
+		case WM_DESTROY:
+		PostQuitMessage(0);
+		return 0;
+	}
 
-    return DefWindowProc(hWin, msg, wParam, lParam);
+	return DefWindowProc(hWin, msg, wParam, lParam);
 }
 
 const char szApp[] = "MUX2";
 
 static DWORD WINAPI ListenForCloseProc(LPVOID lpParameter)
 {
-    UNUSED_PARAMETER(lpParameter);
+	UNUSED_PARAMETER(lpParameter);
 
-    WNDCLASS wc;
+	WNDCLASS wc;
 
-    wc.style         = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc   = mux_WindowProc;
-    wc.cbClsExtra    = 0;
-    wc.cbWndExtra    = 0;
-    wc.hInstance     = 0;
-    wc.hIcon         = LoadIcon(NULL, IDI_APPLICATION);
-    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
-    wc.lpszMenuName  = NULL;
-    wc.lpszClassName = szApp;
+	wc.style = CS_HREDRAW | CS_VREDRAW;
+	wc.lpfnWndProc = mux_WindowProc;
+	wc.cbClsExtra = 0;
+	wc.cbWndExtra = 0;
+	wc.hInstance = 0;
+	wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+	wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+	wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+	wc.lpszMenuName = NULL;
+	wc.lpszClassName = szApp;
 
-    RegisterClass(&wc);
+	RegisterClass(&wc);
 
-    HWND hWnd = CreateWindow(szApp, szApp, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, 0, NULL);
+	HWND hWnd = CreateWindow(szApp, szApp, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+			CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, 0, NULL);
 
-    ShowWindow(hWnd, SW_HIDE);
-    UpdateWindow(hWnd);
+	ShowWindow(hWnd, SW_HIDE);
+	UpdateWindow(hWnd);
 
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0))
-    {
-        DispatchMessage(&msg);
-    }
-    mudstate.shutdown_flag = true;
-    PostQueuedCompletionStatus(CompletionPort, 0, 0, &lpo_wakeup);
-    return 1;
+	MSG msg;
+	while (GetMessage(&msg, NULL, 0, 0))
+	{
+		DispatchMessage(&msg);
+	}
+	mudstate.shutdown_flag = true;
+	PostQueuedCompletionStatus(CompletionPort, 0, 0, &lpo_wakeup);
+	return 1;
 }
 
 void shovecharsNT(int nPorts, PortInfo aPorts[])
 {
-    UNUSED_PARAMETER(nPorts);
-    UNUSED_PARAMETER(aPorts);
+	UNUSED_PARAMETER(nPorts);
+	UNUSED_PARAMETER(aPorts);
 
-    mudstate.debug_cmd = "< shovechars >";
+	mudstate.debug_cmd = "< shovechars >";
 
-    CreateThread(NULL, 0, ListenForCloseProc, NULL, 0, NULL);
+	CreateThread(NULL, 0, ListenForCloseProc, NULL, 0, NULL);
 
-    CLinearTimeAbsolute ltaLastSlice;
-    ltaLastSlice.GetUTC();
+	CLinearTimeAbsolute ltaLastSlice;
+	ltaLastSlice.GetUTC();
 
-    for (;;)
-    {
-        CLinearTimeAbsolute ltaCurrent;
-        ltaCurrent.GetUTC();
-        update_quotas(ltaLastSlice, ltaCurrent);
+	for (;;)
+	{
+		CLinearTimeAbsolute ltaCurrent;
+		ltaCurrent.GetUTC();
+		update_quotas(ltaLastSlice, ltaCurrent);
 
-        // Before processing a possible QUIT command, be sure to give the slave
-        // a chance to report it's findings.
-        //
-        if (iSlaveResult) get_slave_result();
+		// Before processing a possible QUIT command, be sure to give the slave
+		// a chance to report it's findings.
+		//
+		if (iSlaveResult) get_slave_result();
 
-        // Check the scheduler. Run a little ahead into the future so that
-        // we tend to sleep longer.
-        //
-        scheduler.RunTasks(ltaCurrent);
-        CLinearTimeAbsolute ltaWakeUp;
-        if (!scheduler.WhenNext(&ltaWakeUp))
-        {
-            CLinearTimeDelta ltd = time_30m;
-            ltaWakeUp = ltaCurrent + ltd;
-        }
-        else if (ltaWakeUp < ltaCurrent)
-        {
-            ltaWakeUp = ltaCurrent;
-        }
+		// Check the scheduler. Run a little ahead into the future so that
+		// we tend to sleep longer.
+		//
+		scheduler.RunTasks(ltaCurrent);
+		CLinearTimeAbsolute ltaWakeUp;
+		if (!scheduler.WhenNext(&ltaWakeUp))
+		{
+			CLinearTimeDelta ltd = time_30m;
+			ltaWakeUp = ltaCurrent + ltd;
+		}
+		else if (ltaWakeUp < ltaCurrent)
+		{
+			ltaWakeUp = ltaCurrent;
+		}
 
-        // The following gets Asyncronous writes to the sockets going
-        // if they are not already going. Doing it this way is better
-        // than:
-        //
-        //   1) starting an asyncronous write after a single addition
-        //      to the socket's output queue,
-        //
-        //   2) scheduling a task to do it (because we would need to
-        //      either maintain the task's uniqueness in the
-        //      scheduler's queue, or endure many redudant calls to
-        //      process_output for the same descriptor.
-        //
-        DESC *d, *dnext;
-        DESC_SAFEITER_ALL(d, dnext)
-        {
-            if (d->bCallProcessOutputLater)
-            {
-                d->bCallProcessOutputLater = false;
-                process_outputNT(d, false);
-            }
-        }
+		// The following gets Asyncronous writes to the sockets going
+		// if they are not already going. Doing it this way is better
+		// than:
+		//
+		//   1) starting an asyncronous write after a single addition
+		//      to the socket's output queue,
+		//
+		//   2) scheduling a task to do it (because we would need to
+		//      either maintain the task's uniqueness in the
+		//      scheduler's queue, or endure many redudant calls to
+		//      process_output for the same descriptor.
+		//
+		DESC *d, *dnext;
+		DESC_SAFEITER_ALL(d, dnext)
+		{
+			if (d->bCallProcessOutputLater)
+			{
+				d->bCallProcessOutputLater = false;
+				process_outputNT(d, false);
+			}
+		}
 
-        if (mudstate.shutdown_flag)
-            break;
+		if (mudstate.shutdown_flag)
+		break;
 
-        CLinearTimeDelta ltdTimeOut = ltaWakeUp - ltaCurrent;
-        unsigned int iTimeout = ltdTimeOut.ReturnMilliseconds();
-        ProcessWindowsTCP(iTimeout);
-    }
+		CLinearTimeDelta ltdTimeOut = ltaWakeUp - ltaCurrent;
+		unsigned int iTimeout = ltdTimeOut.ReturnMilliseconds();
+		ProcessWindowsTCP(iTimeout);
+	}
 }
 
 #else // WIN32
-
-void shovechars(int nPorts, PortInfo aPorts[])
-{
-    fd_set input_set, output_set;
-    int found;
-    DESC *d, *dnext, *newd;
-    unsigned int avail_descriptors;
-    int maxfds;
-    int i;
+void shovechars(int nPorts, PortInfo aPorts[]) {
+	fd_set input_set, output_set;
+	int found;
+	DESC *d, *dnext, *newd;
+	unsigned int avail_descriptors;
+	int maxfds;
+	int i;
 
 #define CheckInput(x)     FD_ISSET(x, &input_set)
 #define CheckOutput(x)    FD_ISSET(x, &output_set)
 
-    mudstate.debug_cmd = "< shovechars >";
+	mudstate.debug_cmd = "< shovechars >";
 
-    CLinearTimeAbsolute ltaLastSlice;
-    ltaLastSlice.GetUTC();
+	CLinearTimeAbsolute ltaLastSlice;
+	ltaLastSlice.GetUTC();
 
 #ifdef HAVE_GETDTABLESIZE
-    maxfds = getdtablesize();
+	maxfds = getdtablesize();
 #else // HAVE_GETDTABLESIZE
-    maxfds = sysconf(_SC_OPEN_MAX);
+	maxfds = sysconf(_SC_OPEN_MAX);
 #endif // HAVE_GETDTABLESIZE
+	avail_descriptors = maxfds - 7;
 
-    avail_descriptors = maxfds - 7;
+	while (mudstate.shutdown_flag == false) {
+		CLinearTimeAbsolute ltaCurrent;
+		ltaCurrent.GetUTC();
+		update_quotas(ltaLastSlice, ltaCurrent);
 
-    while (mudstate.shutdown_flag == false)
-    {
-        CLinearTimeAbsolute ltaCurrent;
-        ltaCurrent.GetUTC();
-        update_quotas(ltaLastSlice, ltaCurrent);
+		// Check the scheduler.
+		//
+		scheduler.RunTasks(ltaCurrent);
+		CLinearTimeAbsolute ltaWakeUp;
+		if (scheduler.WhenNext(&ltaWakeUp)) {
+			if (ltaWakeUp < ltaCurrent) {
+				ltaWakeUp = ltaCurrent;
+			}
+		} else {
+			CLinearTimeDelta ltd = time_30m;
+			ltaWakeUp = ltaCurrent + ltd;
+		}
 
-        // Check the scheduler.
-        //
-        scheduler.RunTasks(ltaCurrent);
-        CLinearTimeAbsolute ltaWakeUp;
-        if (scheduler.WhenNext(&ltaWakeUp))
-        {
-            if (ltaWakeUp < ltaCurrent)
-            {
-                ltaWakeUp = ltaCurrent;
-            }
-        }
-        else
-        {
-            CLinearTimeDelta ltd = time_30m;
-            ltaWakeUp = ltaCurrent + ltd;
-        }
+		if (mudstate.shutdown_flag) {
+			break;
+		}
 
-        if (mudstate.shutdown_flag)
-        {
-            break;
-        }
+		FD_ZERO(&input_set);
+		FD_ZERO(&output_set);
 
-        FD_ZERO(&input_set);
-        FD_ZERO(&output_set);
+		// Listen for new connections if there are free descriptors.
+		//
+		if (ndescriptors < avail_descriptors) {
+			for (i = 0; i < nPorts; i++) {
+				FD_SET(aPorts[i].socket, &input_set);
+			}
+		}
 
-        // Listen for new connections if there are free descriptors.
-        //
-        if (ndescriptors < avail_descriptors)
-        {
-            for (i = 0; i < nPorts; i++)
-            {
-                FD_SET(aPorts[i].socket, &input_set);
-            }
-        }
-
-        // Listen for replies from the slave socket.
-        //
-        if (!IS_INVALID_SOCKET(slave_socket))
-        {
-            FD_SET(slave_socket, &input_set);
-        }
+		// Listen for replies from the slave socket.
+		//
+		if (!IS_INVALID_SOCKET(slave_socket)) {
+			FD_SET(slave_socket, &input_set);
+		}
 
 #ifdef QUERY_SLAVE
-        // Listen for replies from the sqlslave socket.
-        //
-        if (!IS_INVALID_SOCKET(sqlslave_socket))
-        {
-            FD_SET(sqlslave_socket, &input_set);
-        }
+		// Listen for replies from the sqlslave socket.
+		//
+		if (!IS_INVALID_SOCKET(sqlslave_socket))
+		{
+			FD_SET(sqlslave_socket, &input_set);
+		}
 #endif // QUERY_SLAVE
+		// Mark sockets that we want to test for change in status.
+		//
+		DESC_ITER_ALL(d)
+		{
+			if (!d->input_head) {
+				FD_SET(d->getSocket(), &input_set);
+			}
+			if (d->output_head) {
+				FD_SET(d->getSocket(), &output_set);
+			}
+		}
 
-        // Mark sockets that we want to test for change in status.
-        //
-        DESC_ITER_ALL(d)
-        {
-            if (!d->input_head)
-            {
-                FD_SET(d->getSocket(), &input_set);
-            }
-            if (d->output_head)
-            {
-                FD_SET(d->getSocket(), &output_set);
-            }
-        }
+		// Wait for something to happen.
+		//
+		struct timeval timeout;
+		CLinearTimeDelta ltdTimeout = ltaWakeUp - ltaCurrent;
+		ltdTimeout.ReturnTimeValueStruct(&timeout);
+		found = select(maxd, &input_set, &output_set, (fd_set *) NULL,
+				&timeout);
 
-        // Wait for something to happen.
-        //
-        struct timeval timeout;
-        CLinearTimeDelta ltdTimeout = ltaWakeUp - ltaCurrent;
-        ltdTimeout.ReturnTimeValueStruct(&timeout);
-        found = select(maxd, &input_set, &output_set, (fd_set *) NULL,
-                   &timeout);
+		if (IS_SOCKET_ERROR(found)) {
+			int iSocketError = SOCKET_LAST_ERROR;
+			if (iSocketError == SOCKET_EBADF) {
+				// This one is bad, as it results in a spiral of
+				// doom, unless we can figure out what the bad file
+				// descriptor is and get rid of it.
+				//
+				log_perror("NET", "FAIL", "checking for activity", "select");
 
-        if (IS_SOCKET_ERROR(found))
-        {
-            int iSocketError = SOCKET_LAST_ERROR;
-            if (iSocketError == SOCKET_EBADF)
-            {
-                // This one is bad, as it results in a spiral of
-                // doom, unless we can figure out what the bad file
-                // descriptor is and get rid of it.
-                //
-                log_perror("NET", "FAIL", "checking for activity", "select");
-
-                // Search for a bad socket amoungst the players.
-                //
-                DESC_ITER_ALL(d)
-                {
-                    if (!ValidSocket(d->getSocket()))
-                    {
-                        STARTLOG(LOG_PROBLEMS, "ERR", "EBADF");
-                        log_text("Bad descriptor ");
-                        log_number(d->getSocket());
-                        ENDLOG;
-                        shutdownsock(d, R_SOCKDIED);
-                    }
-                }
-                if (  !IS_INVALID_SOCKET(slave_socket)
-                   && !ValidSocket(slave_socket))
-                {
-                    // Try to restart the slave, since it presumably
-                    // died.
-                    //
-                    STARTLOG(LOG_PROBLEMS, "ERR", "EBADF");
-                    log_text("Bad slave descriptor ");
-                    log_number(slave_socket);
-                    ENDLOG;
-                    boot_slave(GOD, GOD, GOD, 0);
-                }
+				// Search for a bad socket amoungst the players.
+				//
+				DESC_ITER_ALL(d)
+				{
+					if (!ValidSocket(d->getSocket())) {
+						STARTLOG(LOG_PROBLEMS, "ERR", "EBADF");
+						log_text("Bad descriptor ");
+						log_number(d->getSocket());
+						ENDLOG
+						;
+						shutdownsock(d, R_SOCKDIED);
+					}
+				}
+				if (!IS_INVALID_SOCKET(slave_socket)
+						&& !ValidSocket(slave_socket)) {
+					// Try to restart the slave, since it presumably
+					// died.
+					//
+					STARTLOG(LOG_PROBLEMS, "ERR", "EBADF");
+					log_text("Bad slave descriptor ");
+					log_number(slave_socket);
+					ENDLOG
+					;
+					boot_slave(GOD, GOD, GOD, 0);
+				}
 
 #ifdef QUERY_SLAVE
-                if (  !IS_INVALID_SOCKET(sqlslave_socket)
-                   && !ValidSocket(sqlslave_socket))
-                {
-                    CleanUpSQLSlaveSocket();
-                }
+				if ( !IS_INVALID_SOCKET(sqlslave_socket)
+						&& !ValidSocket(sqlslave_socket))
+				{
+					CleanUpSQLSlaveSocket();
+				}
 #endif // QUERY_SLAVE
+				for (i = 0; i < nPorts; i++) {
+					if (!ValidSocket(aPorts[i].socket)) {
+						// That's it. Game over.
+						//
+						STARTLOG(LOG_PROBLEMS, "ERR", "EBADF");
+						log_text("Bad game port descriptor ");
+						log_number(aPorts[i].socket);
+						ENDLOG
+						;
+						return;
+					}
+				}
+			} else if (iSocketError != SOCKET_EINTR) {
+				log_perror("NET", "FAIL", "checking for activity", "select");
+			}
+			continue;
+		}
 
-                for (i = 0; i < nPorts; i++)
-                {
-                    if (!ValidSocket(aPorts[i].socket))
-                    {
-                        // That's it. Game over.
-                        //
-                        STARTLOG(LOG_PROBLEMS, "ERR", "EBADF");
-                        log_text("Bad game port descriptor ");
-                        log_number(aPorts[i].socket);
-                        ENDLOG;
-                        return;
-                    }
-                }
-            }
-            else if (iSocketError != SOCKET_EINTR)
-            {
-                log_perror("NET", "FAIL", "checking for activity", "select");
-            }
-            continue;
-        }
-
-        // Get usernames and hostnames.
-        //
-        if (  !IS_INVALID_SOCKET(slave_socket)
-           && CheckInput(slave_socket))
-        {
-            while (get_slave_result() == 0)
-            {
-                ; // Nothing.
-            }
-        }
+		// Get usernames and hostnames.
+		//
+		if (!IS_INVALID_SOCKET(slave_socket) && CheckInput(slave_socket)) {
+			while (get_slave_result() == 0) {
+				; // Nothing.
+			}
+		}
 
 #ifdef QUERY_SLAVE
-        // Get result sets from sqlslave.
-        //
-        if (  !IS_INVALID_SOCKET(sqlslave_socket)
-           && CheckInput(sqlslave_socket))
-        {
-            while (get_sqlslave_result() == 0)
-            {
-                ; // Nothing.
-            }
-        }
+		// Get result sets from sqlslave.
+		//
+		if ( !IS_INVALID_SOCKET(sqlslave_socket)
+				&& CheckInput(sqlslave_socket))
+		{
+			while (get_sqlslave_result() == 0)
+			{
+				; // Nothing.
+			}
+		}
 #endif // QUERY_SLAVE
+		// Check for new connection requests.
+		//
+		for (i = 0; i < nPorts; i++) {
+			if (CheckInput(aPorts[i].socket)) {
+				int iSocketError;
+				newd = new_connection(aPorts + i, &iSocketError);
+				if (!newd) {
+					if (iSocketError && iSocketError != SOCKET_EINTR) {
+						log_perror("NET", "FAIL", NULL, "new_connection");
+					}
+				} else if (!IS_INVALID_SOCKET(newd->getSocket())
+						&& maxd <= newd->getSocket()) {
+					maxd = newd->getSocket() + 1;
+				}
+			}
+		}
 
-        // Check for new connection requests.
-        //
-        for (i = 0; i < nPorts; i++)
-        {
-            if (CheckInput(aPorts[i].socket))
-            {
-                int iSocketError;
-                newd = new_connection(aPorts+i, &iSocketError);
-                if (!newd)
-                {
-                    if (  iSocketError
-                       && iSocketError != SOCKET_EINTR)
-                    {
-                        log_perror("NET", "FAIL", NULL, "new_connection");
-                    }
-                }
-                else if (  !IS_INVALID_SOCKET(newd->getSocket())
-                        && maxd <= newd->getSocket())
-                {
-                    maxd = newd->getSocket() + 1;
-                }
-            }
-        }
+		// Check for activity on user sockets.
+		//
+		DESC_SAFEITER_ALL(d, dnext)
+		{
+			// Process input from sockets with pending input.
+			//
+			if (CheckInput(d->getSocket())) {
+				// Undo autodark
+				//
+				if (d->flags & DS_AUTODARK) {
+					// Clear the DS_AUTODARK on every related session.
+					//
+					DESC *d1;
+					DESC_ITER_PLAYER(d->player, d1)
+					{
+						d1->flags &= ~DS_AUTODARK;
+					}
+					db[d->player].fs.word[FLAG_WORD1] &= ~DARK;
+				}
 
-        // Check for activity on user sockets.
-        //
-        DESC_SAFEITER_ALL(d, dnext)
-        {
-            // Process input from sockets with pending input.
-            //
-            if (CheckInput(d->getSocket()))
-            {
-                // Undo autodark
-                //
-                if (d->flags & DS_AUTODARK)
-                {
-                    // Clear the DS_AUTODARK on every related session.
-                    //
-                    DESC *d1;
-                    DESC_ITER_PLAYER(d->player, d1)
-                    {
-                        d1->flags &= ~DS_AUTODARK;
-                    }
-                    db[d->player].fs.word[FLAG_WORD1] &= ~DARK;
-                }
+				// Process received data.
+				//
+				if (!process_input(d)) {
+					shutdownsock(d, R_SOCKDIED);
+					continue;
+				}
+			}
 
-                // Process received data.
-                //
-                if (!process_input(d))
-                {
-                    shutdownsock(d, R_SOCKDIED);
-                    continue;
-                }
-            }
-
-            // Process output for sockets with pending output.
-            //
-            if (CheckOutput(d->getSocket()))
-            {
-                process_output(d, true);
-            }
-        }
-    }
+			// Process output for sockets with pending output.
+			//
+			if (CheckOutput(d->getSocket())) {
+				process_output(d, true);
+			}
+		}
+	}
 }
 
 #endif // WIN32
+SOCKET makeConnection(const int SOCKET_IN, const ConnectionType& TYPE,
+		struct sockaddr * pSocketOut) {
+	socklen_t addr_len = sizeof(struct sockaddr);
+	SOCKET baseSocket = accept(SOCKET_IN, pSocketOut, &addr_len);
+	switch (TYPE) {
+	case NORMAL:
+		return baseSocket;
+		//TODO: Add websocket handshake stuff here
+	}
+	return INVALID_SOCKET;
+}
 
-DESC *new_connection(PortInfo *Port, int *piSocketError)
-{
-    DESC *d;
-    struct sockaddr_in addr;
+DESC *new_connection(PortInfo *Port, int *piSocketError) {
+	DESC *d;
+	struct sockaddr_in addr; // TODO: Edit to allow for IPv6?
 #ifdef SOCKLEN_T_DCL
-    socklen_t addr_len;
+	socklen_t addr_len;
 #else // SOCKLEN_T_DCL
-    int addr_len;
+	int addr_len;
 #endif // SOCKLEN_T_DCL
 #ifndef WIN32
-    int len;
+	int len;
 #endif // !WIN32
+	const char *cmdsave = mudstate.debug_cmd;
+	mudstate.debug_cmd = "< new_connection >";
+	addr_len = sizeof(struct sockaddr);
 
-    const char *cmdsave = mudstate.debug_cmd;
-    mudstate.debug_cmd = "< new_connection >";
-    addr_len = sizeof(struct sockaddr);
+	//SOCKET newsock = accept(Port->socket, (struct sockaddr *)&addr, &addr_len);
+	SOCKET newsock = makeConnection(Port->socket, Port->type,
+			(struct sockaddr *) &addr);
 
-    SOCKET newsock = accept(Port->socket, (struct sockaddr *)&addr, &addr_len);
+	if (IS_INVALID_SOCKET(newsock)) {
+		*piSocketError = SOCKET_LAST_ERROR;
+		mudstate.debug_cmd = cmdsave;
+		return 0;
+	}
 
-    if (IS_INVALID_SOCKET(newsock))
-    {
-        *piSocketError = SOCKET_LAST_ERROR;
-        mudstate.debug_cmd = cmdsave;
-        return 0;
-    }
+	char *pBuffM2 = alloc_mbuf("new_connection.address");
+	mux_strncpy(pBuffM2, inet_ntoa(addr.sin_addr), MBUF_SIZE - 1);
+	unsigned short usPort = ntohs(addr.sin_port);
 
-    char *pBuffM2 = alloc_mbuf("new_connection.address");
-    mux_strncpy(pBuffM2, inet_ntoa(addr.sin_addr), MBUF_SIZE-1);
-    unsigned short usPort = ntohs(addr.sin_port);
+	DebugTotalSockets++;
+	if (site_check(addr.sin_addr, mudstate.access_list) == H_FORBIDDEN) {
+		STARTLOG(LOG_NET | LOG_SECURITY, "NET", "SITE");
+		char *pBuffM1 = alloc_mbuf("new_connection.LOG.badsite");
+		mux_sprintf(pBuffM1, MBUF_SIZE,
+				"[%u/%s] Connection refused.  (Remote port %d)", newsock,
+				pBuffM2, usPort);
+		log_text(pBuffM1);
+		free_mbuf(pBuffM1);
+		ENDLOG
+		;
 
-    DebugTotalSockets++;
-    if (site_check(addr.sin_addr, mudstate.access_list) == H_FORBIDDEN)
-    {
-        STARTLOG(LOG_NET | LOG_SECURITY, "NET", "SITE");
-        char *pBuffM1  = alloc_mbuf("new_connection.LOG.badsite");
-        mux_sprintf(pBuffM1, MBUF_SIZE, "[%u/%s] Connection refused.  (Remote port %d)",
-            newsock, pBuffM2, usPort);
-        log_text(pBuffM1);
-        free_mbuf(pBuffM1);
-        ENDLOG;
+		// Report site monitor information.
+		//
+		SiteMonSend(newsock, pBuffM2, NULL, "Connection refused");
 
-        // Report site monitor information.
-        //
-        SiteMonSend(newsock, pBuffM2, NULL, "Connection refused");
-
-        fcache_rawdump(newsock, FC_CONN_SITE);
-        shutdown(newsock, SD_BOTH);
-        if (SOCKET_CLOSE(newsock) == 0)
-        {
-            DebugTotalSockets--;
-        }
-        newsock = INVALID_SOCKET;
-        errno = 0;
-        d = NULL;
-    }
-    else
-    {
+		fcache_rawdump(newsock, FC_CONN_SITE);
+		shutdown(newsock, SD_BOTH);
+		if (SOCKET_CLOSE(newsock) == 0) {
+			DebugTotalSockets--;
+		}
+		newsock = INVALID_SOCKET;
+		errno = 0;
+		d = NULL;
+	} else {
 #ifdef WIN32
-        // Make slave request
-        //
-        // Go take control of the stack, but don't bother if it takes
-        // longer than 5 seconds to do it.
-        //
-        if (  bSlaveBooted
-           && WAIT_OBJECT_0 == WaitForSingleObject(hSlaveRequestStackSemaphore, 5000))
-        {
-            // We have control of the stack. Skip the request if the stack is full.
-            //
-            if (iSlaveRequest < SLAVE_REQUEST_STACK_SIZE)
-            {
-                // There is room on the stack, so make the request.
-                //
-                SlaveRequests[iSlaveRequest].sa_in = addr;
-                SlaveRequests[iSlaveRequest].port_in = Port->port;
-                iSlaveRequest++;
-                ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
+		// Make slave request
+		//
+		// Go take control of the stack, but don't bother if it takes
+		// longer than 5 seconds to do it.
+		//
+		if ( bSlaveBooted
+				&& WAIT_OBJECT_0 == WaitForSingleObject(hSlaveRequestStackSemaphore, 5000))
+		{
+			// We have control of the stack. Skip the request if the stack is full.
+			//
+			if (iSlaveRequest < SLAVE_REQUEST_STACK_SIZE)
+			{
+				// There is room on the stack, so make the request.
+				//
+				SlaveRequests[iSlaveRequest].sa_in = addr;
+				SlaveRequests[iSlaveRequest].port_in = Port->port;
+				iSlaveRequest++;
+				ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
 
-                // Wake up a single slave thread. Event automatically resets itself.
-                //
-                ReleaseSemaphore(hSlaveThreadsSemaphore, 1, NULL);
-            }
-            else
-            {
-                // No room on the stack, so skip it.
-                //
-                ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
-            }
-        }
+				// Wake up a single slave thread. Event automatically resets itself.
+				//
+				ReleaseSemaphore(hSlaveThreadsSemaphore, 1, NULL);
+			}
+			else
+			{
+				// No room on the stack, so skip it.
+				//
+				ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
+			}
+		}
 #else // WIN32
-        // Make slave request
-        //
-        if (  !IS_INVALID_SOCKET(slave_socket)
-           && mudconf.use_hostname)
-        {
-            char *pBuffL1 = alloc_lbuf("new_connection.write");
-            mux_sprintf(pBuffL1, LBUF_SIZE, "%s\n%s,%d,%d\n", pBuffM2, pBuffM2, usPort,
-                Port->port);
-            len = strlen(pBuffL1);
-            if (mux_write(slave_socket, pBuffL1, len) < 0)
-            {
-                CleanUpSlaveSocket();
-                CleanUpSlaveProcess();
+		// Make slave request
+		//
+		if (!IS_INVALID_SOCKET(slave_socket) && mudconf.use_hostname) {
+			char *pBuffL1 = alloc_lbuf("new_connection.write");
+			mux_sprintf(pBuffL1, LBUF_SIZE, "%s\n%s,%d,%d\n", pBuffM2, pBuffM2,
+					usPort, Port->port);
+			len = strlen(pBuffL1);
+			if (mux_write(slave_socket, pBuffL1, len) < 0) {
+				CleanUpSlaveSocket();
+				CleanUpSlaveProcess();
 
-                STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
-                log_text("write() of slave request failed. Slave stopped.");
-                ENDLOG;
-            }
-            free_lbuf(pBuffL1);
-        }
+				STARTLOG(LOG_ALWAYS, "NET", "SLAVE");
+				log_text("write() of slave request failed. Slave stopped.");
+				ENDLOG
+				;
+			}
+			free_lbuf(pBuffL1);
+		}
 #endif // WIN32
+		STARTLOG(LOG_NET, "NET", "CONN");
+		char *pBuffM3 = alloc_mbuf("new_connection.LOG.open");
+		mux_sprintf(pBuffM3, MBUF_SIZE,
+				"[%u/%s] Connection opened (remote port %d)", newsock, pBuffM2,
+				usPort);
+		log_text(pBuffM3);
+		free_mbuf(pBuffM3);
+		ENDLOG
+		;
 
-        STARTLOG(LOG_NET, "NET", "CONN");
-        char *pBuffM3 = alloc_mbuf("new_connection.LOG.open");
-        mux_sprintf(pBuffM3, MBUF_SIZE, "[%u/%s] Connection opened (remote port %d)", newsock,
-            pBuffM2, usPort);
-        log_text(pBuffM3);
-        free_mbuf(pBuffM3);
-        ENDLOG;
+		d = initializesock(newsock, &addr);
+		d->setSocket(newsock, Port->type);
+		TelnetSetup(d);
 
-        d = initializesock(newsock, &addr);
-        TelnetSetup(d);
+		// Initalize everything before sending the sitemon info, so that we
+		// can pass the descriptor, d.
+		//
+		SiteMonSend(newsock, pBuffM2, d, "Connection");
 
-        // Initalize everything before sending the sitemon info, so that we
-        // can pass the descriptor, d.
-        //
-        SiteMonSend(newsock, pBuffM2, d, "Connection");
-
-        welcome_user(d);
-    }
-    free_mbuf(pBuffM2);
-    *piSocketError = SOCKET_LAST_ERROR;
-    mudstate.debug_cmd = cmdsave;
-    return d;
+		welcome_user(d);
+	}
+	free_mbuf(pBuffM2);
+	*piSocketError = SOCKET_LAST_ERROR;
+	mudstate.debug_cmd = cmdsave;
+	return d;
 }
 
 // Disconnect reasons that get written to the logfile
 //
-static const char *disc_reasons[] =
-{
-    "Unspecified",
-    "Quit",
-    "Inactivity Timeout",
-    "Booted",
-    "Remote Close or Net Failure",
-    "Game Shutdown",
-    "Login Retry Limit",
-    "Logins Disabled",
-    "Logout (Connection Not Dropped)",
-    "Too Many Connected Players"
-};
+static const char *disc_reasons[] = { "Unspecified", "Quit",
+		"Inactivity Timeout", "Booted", "Remote Close or Net Failure",
+		"Game Shutdown", "Login Retry Limit", "Logins Disabled",
+		"Logout (Connection Not Dropped)", "Too Many Connected Players" };
 
 // Disconnect reasons that get fed to A_ADISCONNECT via announce_disconnect
 //
-static const char *disc_messages[] =
-{
-    "Unknown",
-    "Quit",
-    "Timeout",
-    "Boot",
-    "Netfailure",
-    "Shutdown",
-    "BadLogin",
-    "NoLogins",
-    "Logout",
-    "GameFull"
-};
+static const char *disc_messages[] = { "Unknown", "Quit", "Timeout", "Boot",
+		"Netfailure", "Shutdown", "BadLogin", "NoLogins", "Logout", "GameFull" };
 
-void shutdownsock(DESC *d, int reason)
-{
-    char *buff, *buff2;
-    int i, num;
-    DESC *dtemp;
+void shutdownsock(DESC *d, int reason) {
+	char *buff, *buff2;
+	int i, num;
+	DESC *dtemp;
 
-    if (  (reason == R_LOGOUT)
-       && (site_check((d->address).sin_addr, mudstate.access_list) == H_FORBIDDEN))
-    {
-        reason = R_QUIT;
-    }
+	if ((reason == R_LOGOUT)
+			&& (site_check((d->address).sin_addr, mudstate.access_list)
+					== H_FORBIDDEN)) {
+		reason = R_QUIT;
+	}
 
-    if (  reason < R_MIN
-       || R_MAX < reason)
-    {
-        reason = R_UNKNOWN;
-    }
+	if (reason < R_MIN || R_MAX < reason) {
+		reason = R_UNKNOWN;
+	}
 
-    CLinearTimeAbsolute ltaNow;
-    ltaNow.GetUTC();
+	CLinearTimeAbsolute ltaNow;
+	ltaNow.GetUTC();
 
-    if (d->flags & DS_CONNECTED)
-    {
-        // Reason: attribute (disconnect reason)
-        //
-        atr_add_raw(d->player, A_REASON, disc_messages[reason]);
+	if (d->flags & DS_CONNECTED) {
+		// Reason: attribute (disconnect reason)
+		//
+		atr_add_raw(d->player, A_REASON, disc_messages[reason]);
 
-        // Update the A_CONNINFO attribute.
-        //
-        long anFields[4];
-        fetch_ConnectionInfoFields(d->player, anFields);
+		// Update the A_CONNINFO attribute.
+		//
+		long anFields[4];
+		fetch_ConnectionInfoFields(d->player, anFields);
 
-        // One of the active sessions is going away. It doesn't matter which
-        // one.
-        //
-        anFields[CIF_NUMCONNECTS]++;
+		// One of the active sessions is going away. It doesn't matter which
+		// one.
+		//
+		anFields[CIF_NUMCONNECTS]++;
 
-        // What are the two longest sessions?
-        //
-        DESC *dOldest[2];
-        find_oldest(d->player, dOldest);
+		// What are the two longest sessions?
+		//
+		DESC *dOldest[2];
+		find_oldest(d->player, dOldest);
 
-        CLinearTimeDelta ltdFull;
-        ltdFull = ltaNow - dOldest[0]->connected_at;
-        long tFull = ltdFull.ReturnSeconds();
-        if (dOldest[0] == d)
-        {
-            // We are dropping the oldest connection.
-            //
-            CLinearTimeDelta ltdPart;
-            if (dOldest[1])
-            {
-                // There is another (more recently made) connection.
-                //
-                ltdPart = dOldest[1]->connected_at - dOldest[0]->connected_at;
-            }
-            else
-            {
-                // There is only one connection.
-                //
-                ltdPart = ltdFull;
-            }
-            long tPart = ltdPart.ReturnSeconds();
+		CLinearTimeDelta ltdFull;
+		ltdFull = ltaNow - dOldest[0]->connected_at;
+		long tFull = ltdFull.ReturnSeconds();
+		if (dOldest[0] == d) {
+			// We are dropping the oldest connection.
+			//
+			CLinearTimeDelta ltdPart;
+			if (dOldest[1]) {
+				// There is another (more recently made) connection.
+				//
+				ltdPart = dOldest[1]->connected_at - dOldest[0]->connected_at;
+			} else {
+				// There is only one connection.
+				//
+				ltdPart = ltdFull;
+			}
+			long tPart = ltdPart.ReturnSeconds();
 
-            anFields[CIF_TOTALTIME] += tPart;
-            if (anFields[CIF_LONGESTCONNECT] < tFull)
-            {
-                anFields[CIF_LONGESTCONNECT] = tFull;
-            }
-        }
-        anFields[CIF_LASTCONNECT] = tFull;
+			anFields[CIF_TOTALTIME] += tPart;
+			if (anFields[CIF_LONGESTCONNECT] < tFull) {
+				anFields[CIF_LONGESTCONNECT] = tFull;
+			}
+		}
+		anFields[CIF_LASTCONNECT] = tFull;
 
-        put_ConnectionInfoFields(d->player, anFields, ltaNow);
+		put_ConnectionInfoFields(d->player, anFields, ltaNow);
 
-        // If we are doing a LOGOUT, keep the connection open so that the
-        // player can connect to a different character. Otherwise, we
-        // do the normal disconnect stuff.
-        //
-        if (reason == R_LOGOUT)
-        {
-            STARTLOG(LOG_NET | LOG_LOGIN, "NET", "LOGO")
-            buff = alloc_mbuf("shutdownsock.LOG.logout");
-            mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ", d->getSocket(), d->addr);
-            log_text(buff);
-            log_name(d->player);
-            mux_sprintf(buff, MBUF_SIZE, " <Reason: %s>", disc_reasons[reason]);
-            log_text(buff);
-            free_mbuf(buff);
-            ENDLOG;
-        }
-        else
-        {
-            fcache_dump(d, FC_QUIT);
-            STARTLOG(LOG_NET | LOG_LOGIN, "NET", "DISC")
-            buff = alloc_mbuf("shutdownsock.LOG.disconn");
-            mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ", d->getSocket(), d->addr);
-            log_text(buff);
-            log_name(d->player);
-            mux_sprintf(buff, MBUF_SIZE, " <Reason: %s>", disc_reasons[reason]);
-            log_text(buff);
-            free_mbuf(buff);
-            ENDLOG;
-            SiteMonSend(d->getSocket(), d->addr, d, "Disconnection");
-        }
+		// If we are doing a LOGOUT, keep the connection open so that the
+		// player can connect to a different character. Otherwise, we
+		// do the normal disconnect stuff.
+		//
+		if (reason == R_LOGOUT) {
+			STARTLOG(LOG_NET | LOG_LOGIN, "NET", "LOGO")
+				buff = alloc_mbuf("shutdownsock.LOG.logout");
+				mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ",
+						d->getSocket(), d->addr);
+				log_text(buff);
+				log_name(d->player);
+				mux_sprintf(buff, MBUF_SIZE, " <Reason: %s>",
+						disc_reasons[reason]);
+				log_text(buff);
+				free_mbuf(buff);
+				ENDLOG
+			;
+		} else {
+			fcache_dump(d, FC_QUIT);
+			STARTLOG(LOG_NET | LOG_LOGIN, "NET", "DISC")
+				buff = alloc_mbuf("shutdownsock.LOG.disconn");
+				mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Logout by ",
+						d->getSocket(), d->addr);
+				log_text(buff);
+				log_name(d->player);
+				mux_sprintf(buff, MBUF_SIZE, " <Reason: %s>",
+						disc_reasons[reason]);
+				log_text(buff);
+				free_mbuf(buff);
+				ENDLOG
+			;
+			SiteMonSend(d->getSocket(), d->addr, d, "Disconnection");
+		}
 
-        // If requested, write an accounting record of the form:
-        // Plyr# Flags Cmds ConnTime Loc Money [Site] <DiscRsn> Name
-        //
-        STARTLOG(LOG_ACCOUNTING, "DIS", "ACCT");
-        CLinearTimeDelta ltd = ltaNow - d->connected_at;
-        int Seconds = ltd.ReturnSeconds();
-        buff = alloc_lbuf("shutdownsock.LOG.accnt");
-        buff2 = decode_flags(GOD, &(db[d->player].fs));
-        dbref locPlayer = Location(d->player);
-        int penPlayer = Pennies(d->player);
-        const char *PlayerName = Name(d->player);
-        mux_sprintf(buff, LBUF_SIZE, "%d %s %d %d %d %d [%s] <%s> %s", d->player, buff2, d->command_count,
-                Seconds, locPlayer, penPlayer, d->addr, disc_reasons[reason],
-                PlayerName);
-        log_text(buff);
-        free_lbuf(buff);
-        free_sbuf(buff2);
-        ENDLOG;
-        announce_disconnect(d->player, d, disc_messages[reason]);
-    }
-    else
-    {
-        if (reason == R_LOGOUT)
-        {
-            reason = R_QUIT;
-        }
-        STARTLOG(LOG_SECURITY | LOG_NET, "NET", "DISC");
-        buff = alloc_mbuf("shutdownsock.LOG.neverconn");
-        mux_sprintf(buff, MBUF_SIZE, "[%u/%s] Connection closed, never connected. <Reason: %s>",
-            d->getSocket(), d->addr, disc_reasons[reason]);
-        log_text(buff);
-        free_mbuf(buff);
-        ENDLOG;
-        SiteMonSend(d->getSocket(), d->addr, d, "N/C Connection Closed");
-    }
+		// If requested, write an accounting record of the form:
+		// Plyr# Flags Cmds ConnTime Loc Money [Site] <DiscRsn> Name
+		//
+		STARTLOG(LOG_ACCOUNTING, "DIS", "ACCT");
+		CLinearTimeDelta ltd = ltaNow - d->connected_at;
+		int Seconds = ltd.ReturnSeconds();
+		buff = alloc_lbuf("shutdownsock.LOG.accnt");
+		buff2 = decode_flags(GOD, &(db[d->player].fs));
+		dbref locPlayer = Location(d->player);
+		int penPlayer = Pennies(d->player);
+		const char *PlayerName = Name(d->player);
+		mux_sprintf(buff, LBUF_SIZE, "%d %s %d %d %d %d [%s] <%s> %s",
+				d->player, buff2, d->command_count, Seconds, locPlayer,
+				penPlayer, d->addr, disc_reasons[reason], PlayerName);
+		log_text(buff);
+		free_lbuf(buff);
+		free_sbuf(buff2);
+		ENDLOG
+		;
+		announce_disconnect(d->player, d, disc_messages[reason]);
+	} else {
+		if (reason == R_LOGOUT) {
+			reason = R_QUIT;
+		}
+		STARTLOG(LOG_SECURITY | LOG_NET, "NET", "DISC");
+		buff = alloc_mbuf("shutdownsock.LOG.neverconn");
+		mux_sprintf(buff, MBUF_SIZE,
+				"[%u/%s] Connection closed, never connected. <Reason: %s>",
+				d->getSocket(), d->addr, disc_reasons[reason]);
+		log_text(buff);
+		free_mbuf(buff);
+		ENDLOG
+		;
+		SiteMonSend(d->getSocket(), d->addr, d, "N/C Connection Closed");
+	}
 
-    process_output(d, false);
-    clearstrings(d);
+	process_output(d, false);
+	clearstrings(d);
 
-    d->flags &= ~DS_CONNECTED;
+	d->flags &= ~DS_CONNECTED;
 
-    // Is this desc still in interactive mode?
-    //
-    if (d->program_data != NULL)
-    {
-        num = 0;
-        DESC_ITER_PLAYER(d->player, dtemp)
-        {
-            num++;
-        }
+	// Is this desc still in interactive mode?
+	//
+	if (d->program_data != NULL) {
+		num = 0;
+		DESC_ITER_PLAYER(d->player, dtemp)
+		{
+			num++;
+		}
 
-        if (0 == num)
-        {
-            for (i = 0; i < MAX_GLOBAL_REGS; i++)
-            {
-                if (d->program_data->wait_regs[i])
-                {
-                    RegRelease(d->program_data->wait_regs[i]);
-                    d->program_data->wait_regs[i] = NULL;
-                }
-            }
-            MEMFREE(d->program_data);
-            atr_clr(d->player, A_PROGCMD);
-        }
-        d->program_data = NULL;
-    }
+		if (0 == num) {
+			for (i = 0; i < MAX_GLOBAL_REGS; i++) {
+				if (d->program_data->wait_regs[i]) {
+					RegRelease(d->program_data->wait_regs[i]);
+					d->program_data->wait_regs[i] = NULL;
+				}
+			}
+			MEMFREE(d->program_data);
+			atr_clr(d->player, A_PROGCMD);
+		}
+		d->program_data = NULL;
+	}
 
-    if (reason == R_LOGOUT)
-    {
-        d->connected_at.GetUTC();
-        d->retries_left = mudconf.retry_limit;
-        d->command_count = 0;
-        d->timeout = mudconf.idle_timeout;
-        d->player = 0;
-        d->doing[0] = '\0';
-        d->quota = mudconf.cmd_quota_max;
-        d->last_time = d->connected_at;
-        int AccessFlag = site_check((d->address).sin_addr, mudstate.access_list);
-        int SuspectFlag = site_check((d->address).sin_addr, mudstate.suspect_list);
-        d->host_info = AccessFlag | SuspectFlag;
-        d->input_tot = d->input_size;
-        d->output_tot = 0;
-        welcome_user(d);
-    }
-    else
-    {
-        // Cancel any scheduled processing on this descriptor.
-        //
-        scheduler.CancelTask(Task_ProcessCommand, d, 0);
+	if (reason == R_LOGOUT) {
+		d->connected_at.GetUTC();
+		d->retries_left = mudconf.retry_limit;
+		d->command_count = 0;
+		d->timeout = mudconf.idle_timeout;
+		d->player = 0;
+		d->doing[0] = '\0';
+		d->quota = mudconf.cmd_quota_max;
+		d->last_time = d->connected_at;
+		int AccessFlag = site_check((d->address).sin_addr,
+				mudstate.access_list);
+		int SuspectFlag = site_check((d->address).sin_addr,
+				mudstate.suspect_list);
+		d->host_info = AccessFlag | SuspectFlag;
+		d->input_tot = d->input_size;
+		d->output_tot = 0;
+		welcome_user(d);
+	} else {
+		// Cancel any scheduled processing on this descriptor.
+		//
+		scheduler.CancelTask(Task_ProcessCommand, d, 0);
 
 #ifdef WIN32
-        if (bUseCompletionPorts)
-        {
-            // Don't close down the socket twice.
-            //
-            if (!d->bConnectionShutdown)
-            {
-                // Make sure we don't try to initiate or process any
-                // outstanding IOs
-                //
-                d->bConnectionShutdown = true;
+		if (bUseCompletionPorts)
+		{
+			// Don't close down the socket twice.
+			//
+			if (!d->bConnectionShutdown)
+			{
+				// Make sure we don't try to initiate or process any
+				// outstanding IOs
+				//
+				d->bConnectionShutdown = true;
 
-                // Protect removing the descriptor from our linked list from
-                // any interference from the listening thread.
-                //
-                EnterCriticalSection(&csDescriptorList);
-                *d->prev = d->next;
-                if (d->next)
-                {
-                    d->next->prev = d->prev;
-                }
-                LeaveCriticalSection(&csDescriptorList);
+				// Protect removing the descriptor from our linked list from
+				// any interference from the listening thread.
+				//
+				EnterCriticalSection(&csDescriptorList);
+				*d->prev = d->next;
+				if (d->next)
+				{
+					d->next->prev = d->prev;
+				}
+				LeaveCriticalSection(&csDescriptorList);
 
-                // This descriptor may hang around awhile, clear out the links.
-                //
-                d->next = 0;
-                d->prev = 0;
+				// This descriptor may hang around awhile, clear out the links.
+				//
+				d->next = 0;
+				d->prev = 0;
 
-                // Close the connection in 5 seconds.
-                //
-                scheduler.DeferTask(ltaNow + time_5s,
-                    PRIORITY_SYSTEM, Task_DeferredClose, d, 0);
-            }
-            return;
-        }
+				// Close the connection in 5 seconds.
+				//
+				scheduler.DeferTask(ltaNow + time_5s,
+						PRIORITY_SYSTEM, Task_DeferredClose, d, 0);
+			}
+			return;
+		}
 #endif
 
-        shutdown(d->getSocket(), SD_BOTH);
-        if (SOCKET_CLOSE(d->getSocket()) == 0)
-        {
-            DebugTotalSockets--;
-        }
-        d->setSocket(INVALID_SOCKET, NORMAL);
+		shutdown(d->getSocket(), SD_BOTH);
+		if (SOCKET_CLOSE(d->getSocket()) == 0) {
+			DebugTotalSockets--;
+		}
+		d->setSocket(INVALID_SOCKET, NORMAL);
 
-        *d->prev = d->next;
-        if (d->next)
-        {
-            d->next->prev = d->prev;
-        }
+		*d->prev = d->next;
+		if (d->next) {
+			d->next->prev = d->prev;
+		}
 
-        // This descriptor may hang around awhile, clear out the links.
-        //
-        d->next = 0;
-        d->prev = 0;
+		// This descriptor may hang around awhile, clear out the links.
+		//
+		d->next = 0;
+		d->prev = 0;
 
-        // If we don't have queued IOs, then we can free these, now.
-        //
-        freeqs(d);
-        free_desc(d);
-        ndescriptors--;
-    }
+		// If we don't have queued IOs, then we can free these, now.
+		//
+		freeqs(d);
+		free_desc(d);
+		ndescriptors--;
+	}
 }
 
 #ifdef WIN32
 static void shutdownsock_brief(DESC *d)
 {
-    // don't close down the socket twice
-    //
-    if (d->bConnectionShutdown)
-    {
-        return;
-    }
+	// don't close down the socket twice
+	//
+	if (d->bConnectionShutdown)
+	{
+		return;
+	}
 
-    // make sure we don't try to initiate or process any outstanding IOs
-    //
-    d->bConnectionShutdown = true;
-    d->bConnectionDropped = true;
+	// make sure we don't try to initiate or process any outstanding IOs
+	//
+	d->bConnectionShutdown = true;
+	d->bConnectionDropped = true;
 
+	// cancel any pending reads or writes on this socket
+	//
+	if (!fpCancelIo((HANDLE) d->getSocket()))
+	{
+		Log.tinyprintf("Error %ld on CancelIo" ENDLINE, GetLastError());
+	}
 
-    // cancel any pending reads or writes on this socket
-    //
-    if (!fpCancelIo((HANDLE) d->getSocket()))
-    {
-        Log.tinyprintf("Error %ld on CancelIo" ENDLINE, GetLastError());
-    }
+	shutdown(d->getSocket(), SD_BOTH);
+	if (closesocket(d->descriptor) == 0)
+	{
+		DebugTotalSockets--;
+	}
+	d->descriptor = INVALID_SOCKET;
 
-    shutdown(d->getSocket(), SD_BOTH);
-    if (closesocket(d->descriptor) == 0)
-    {
-        DebugTotalSockets--;
-    }
-    d->descriptor = INVALID_SOCKET;
+	// protect removing the descriptor from our linked list from
+	// any interference from the listening thread
+	//
+	EnterCriticalSection(&csDescriptorList);
 
-    // protect removing the descriptor from our linked list from
-    // any interference from the listening thread
-    //
-    EnterCriticalSection(&csDescriptorList);
+	*d->prev = d->next;
+	if (d->next)
+	{
+		d->next->prev = d->prev;
+	}
 
-    *d->prev = d->next;
-    if (d->next)
-    {
-        d->next->prev = d->prev;
-    }
+	d->next = 0;
+	d->prev = 0;
 
-    d->next = 0;
-    d->prev = 0;
+	// safe to allow the listening thread to continue now
+	LeaveCriticalSection(&csDescriptorList);
 
-    // safe to allow the listening thread to continue now
-    LeaveCriticalSection(&csDescriptorList);
-
-    // post a notification that it is safe to free the descriptor
-    // we can't free the descriptor here (below) as there may be some
-    // queued completed IOs that will crash when they refer to a descriptor
-    // (d) that has been freed.
-    //
-    if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_aborted))
-    {
-        Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in shutdownsock" ENDLINE, GetLastError());
-    }
+	// post a notification that it is safe to free the descriptor
+	// we can't free the descriptor here (below) as there may be some
+	// queued completed IOs that will crash when they refer to a descriptor
+	// (d) that has been freed.
+	//
+	if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_aborted))
+	{
+		Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in shutdownsock" ENDLINE, GetLastError());
+	}
 
 }
 #endif // WIN32
-
-int make_nonblocking(SOCKET s)
-{
+int make_nonblocking(SOCKET s) {
 #ifdef WIN32
-    unsigned long on = 1;
-    if (IS_SOCKET_ERROR(ioctlsocket(s, FIONBIO, &on)))
-    {
-        log_perror("NET", "FAIL", "make_nonblocking", "ioctlsocket");
-        return -1;
-    }
+	unsigned long on = 1;
+	if (IS_SOCKET_ERROR(ioctlsocket(s, FIONBIO, &on)))
+	{
+		log_perror("NET", "FAIL", "make_nonblocking", "ioctlsocket");
+		return -1;
+	}
 #else // WIN32
 #if defined(O_NONBLOCK)
-    if (fcntl(s, F_SETFL, O_NONBLOCK) < 0)
-    {
-        log_perror("NET", "FAIL", "make_nonblocking", "fcntl");
-        return -1;
-    }
+	if (fcntl(s, F_SETFL, O_NONBLOCK) < 0) {
+		log_perror("NET", "FAIL", "make_nonblocking", "fcntl");
+		return -1;
+	}
 #elif defined(FNDELAY)
-    if (fcntl(s, F_SETFL, FNDELAY) < 0)
-    {
-        log_perror("NET", "FAIL", "make_nonblocking", "fcntl");
-        return -1;
-    }
+	if (fcntl(s, F_SETFL, FNDELAY) < 0)
+	{
+		log_perror("NET", "FAIL", "make_nonblocking", "fcntl");
+		return -1;
+	}
 #elif defined(O_NDELAY)
-    if (fcntl(s, F_SETFL, O_NDELAY) < 0)
-    {
-        log_perror("NET", "FAIL", "make_nonblocking", "fcntl");
-        return -1;
-    }
+	if (fcntl(s, F_SETFL, O_NDELAY) < 0)
+	{
+		log_perror("NET", "FAIL", "make_nonblocking", "fcntl");
+		return -1;
+	}
 #elif defined(FIONBIO)
-    unsigned long on = 1;
-    if (ioctl(s, FIONBIO, &on) < 0)
-    {
-        log_perror("NET", "FAIL", "make_nonblocking", "ioctl");
-        return -1;
-    }
+	unsigned long on = 1;
+	if (ioctl(s, FIONBIO, &on) < 0)
+	{
+		log_perror("NET", "FAIL", "make_nonblocking", "ioctl");
+		return -1;
+	}
 #endif // O_NONBLOCK, FNDELAY, O_NDELAY, FIONBIO
 #endif // WIN32
-    return 0;
+	return 0;
 }
 
-static void make_nolinger(SOCKET s)
-{
+static void make_nolinger(SOCKET s) {
 #if defined(HAVE_LINGER)
-    struct linger ling;
-    ling.l_onoff = 0;
-    ling.l_linger = 0;
-    if (IS_SOCKET_ERROR(setsockopt(s, SOL_SOCKET, SO_LINGER, (char *)&ling, sizeof(ling))))
-    {
-        log_perror("NET", "FAIL", "linger", "setsockopt");
-    }
+	struct linger ling;
+	ling.l_onoff = 0;
+	ling.l_linger = 0;
+	if (IS_SOCKET_ERROR(setsockopt(s, SOL_SOCKET, SO_LINGER, (char *)&ling, sizeof(ling)))) {
+		log_perror("NET", "FAIL", "linger", "setsockopt");
+	}
 #endif // HAVE_LINGER
 }
 
-static void config_socket(SOCKET s)
-{
-    make_nonblocking(s);
-    make_nolinger(s);
+static void config_socket(SOCKET s) {
+	make_nonblocking(s);
+	make_nolinger(s);
 }
 
 // This function must be thread safe WinNT
 //
-DESC *initializesock(SOCKET s, struct sockaddr_in *a)
-{
-    DESC *d;
+DESC *initializesock(SOCKET s, struct sockaddr_in *a) {
+	DESC *d;
 
 #ifdef WIN32
-    // protect adding the descriptor from the linked list from
-    // any interference from socket shutdowns
-    //
-    if (bUseCompletionPorts)
-    {
-        EnterCriticalSection(&csDescriptorList);
-    }
+	// protect adding the descriptor from the linked list from
+	// any interference from socket shutdowns
+	//
+	if (bUseCompletionPorts)
+	{
+		EnterCriticalSection(&csDescriptorList);
+	}
 #endif // WIN32
-
-    d = alloc_desc("init_sock");
+	d = alloc_desc("init_sock");
 
 #ifdef WIN32
-    if (bUseCompletionPorts)
-    {
-        LeaveCriticalSection(&csDescriptorList);
-    }
+	if (bUseCompletionPorts)
+	{
+		LeaveCriticalSection(&csDescriptorList);
+	}
 #endif // WIN32
+	d->setSocket(s, NORMAL);
+	d->flags = 0;
+	d->connected_at.GetUTC();
+	d->last_time = d->connected_at;
+	d->retries_left = mudconf.retry_limit;
+	d->command_count = 0;
+	d->timeout = mudconf.idle_timeout;
 
-    d->setSocket(s, NORMAL);
-    d->flags = 0;
-    d->connected_at.GetUTC();
-    d->last_time = d->connected_at;
-    d->retries_left = mudconf.retry_limit;
-    d->command_count = 0;
-    d->timeout = mudconf.idle_timeout;
+	int AccessFlag = site_check((*a).sin_addr, mudstate.access_list);
+	int SuspectFlag = site_check((*a).sin_addr, mudstate.suspect_list);
+	d->host_info = AccessFlag | SuspectFlag;
 
-    int AccessFlag = site_check((*a).sin_addr, mudstate.access_list);
-    int SuspectFlag = site_check((*a).sin_addr, mudstate.suspect_list);
-    d->host_info = AccessFlag | SuspectFlag;
+	// Be sure #0 isn't wizard. Shouldn't be.
+	//
+	d->player = 0;
 
-    // Be sure #0 isn't wizard. Shouldn't be.
-    //
-    d->player = 0;
-
-    d->addr[0] = '\0';
-    d->doing[0] = '\0';
-    d->username[0] = '\0';
-    config_socket(s);
-    d->output_prefix = NULL;
-    d->output_suffix = NULL;
-    d->output_size = 0;
-    d->output_tot = 0;
-    d->output_lost = 0;
-    d->output_head = NULL;
-    d->output_tail = NULL;
-    d->input_head = NULL;
-    d->input_tail = NULL;
-    d->input_size = 0;
-    d->input_tot = 0;
-    d->input_lost = 0;
-    d->raw_input = NULL;
-    d->raw_input_at = NULL;
-    d->nOption = 0;
-    d->raw_input_state = NVT_IS_NORMAL;
-    d->nvt_sga_him_state = OPTION_NO;
-    d->nvt_sga_us_state = OPTION_NO;
-    d->nvt_eor_him_state = OPTION_NO;
-    d->nvt_eor_us_state = OPTION_NO;
-    d->nvt_naws_him_state = OPTION_NO;
-    d->nvt_naws_us_state = OPTION_NO;
-    d->height = 24;
-    d->width = 78;
-    d->quota = mudconf.cmd_quota_max;
-    d->program_data = NULL;
-    d->address = *a;
-    mux_strncpy(d->addr, inet_ntoa(a->sin_addr), 50);
+	d->addr[0] = '\0';
+	d->doing[0] = '\0';
+	d->username[0] = '\0';
+	config_socket(s);
+	d->output_prefix = NULL;
+	d->output_suffix = NULL;
+	d->output_size = 0;
+	d->output_tot = 0;
+	d->output_lost = 0;
+	d->output_head = NULL;
+	d->output_tail = NULL;
+	d->input_head = NULL;
+	d->input_tail = NULL;
+	d->input_size = 0;
+	d->input_tot = 0;
+	d->input_lost = 0;
+	d->raw_input = NULL;
+	d->raw_input_at = NULL;
+	d->nOption = 0;
+	d->raw_input_state = NVT_IS_NORMAL;
+	d->nvt_sga_him_state = OPTION_NO;
+	d->nvt_sga_us_state = OPTION_NO;
+	d->nvt_eor_him_state = OPTION_NO;
+	d->nvt_eor_us_state = OPTION_NO;
+	d->nvt_naws_him_state = OPTION_NO;
+	d->nvt_naws_us_state = OPTION_NO;
+	d->height = 24;
+	d->width = 78;
+	d->quota = mudconf.cmd_quota_max;
+	d->program_data = NULL;
+	d->address = *a;
+	mux_strncpy(d->addr, inet_ntoa(a->sin_addr), 50);
 
 #ifdef WIN32
-    // protect adding the descriptor from the linked list from
-    // any interference from socket shutdowns
-    //
-    if (bUseCompletionPorts)
-    {
-        EnterCriticalSection (&csDescriptorList);
-    }
+	// protect adding the descriptor from the linked list from
+	// any interference from socket shutdowns
+	//
+	if (bUseCompletionPorts)
+	{
+		EnterCriticalSection (&csDescriptorList);
+	}
 #endif // WIN32
+	ndescriptors++;
 
-    ndescriptors++;
-
-    if (descriptor_list)
-    {
-        descriptor_list->prev = &d->next;
-    }
-    d->hashnext = NULL;
-    d->next = descriptor_list;
-    d->prev = &descriptor_list;
-    descriptor_list = d;
+	if (descriptor_list) {
+		descriptor_list->prev = &d->next;
+	}
+	d->hashnext = NULL;
+	d->next = descriptor_list;
+	d->prev = &descriptor_list;
+	descriptor_list = d;
 
 #ifdef WIN32
-    // ok to continue now
-    //
-    if (bUseCompletionPorts)
-    {
-        LeaveCriticalSection (&csDescriptorList);
+	// ok to continue now
+	//
+	if (bUseCompletionPorts)
+	{
+		LeaveCriticalSection (&csDescriptorList);
 
-        d->OutboundOverlapped.hEvent = NULL;
-        d->InboundOverlapped.hEvent = NULL;
-        d->InboundOverlapped.Offset = 0;
-        d->InboundOverlapped.OffsetHigh = 0;
-        d->bWritePending = false;   // no write pending yet
-        d->bConnectionShutdown = false; // not shutdown yet
-        d->bConnectionDropped = false; // not dropped yet
-        d->bCallProcessOutputLater = false;
-    }
+		d->OutboundOverlapped.hEvent = NULL;
+		d->InboundOverlapped.hEvent = NULL;
+		d->InboundOverlapped.Offset = 0;
+		d->InboundOverlapped.OffsetHigh = 0;
+		d->bWritePending = false;   // no write pending yet
+		d->bConnectionShutdown = false;// not shutdown yet
+		d->bConnectionDropped = false;// not dropped yet
+		d->bCallProcessOutputLater = false;
+	}
 #endif // WIN32
-    return d;
+	return d;
 }
 
 #ifdef WIN32
@@ -2391,219 +2252,211 @@ FTASK *process_output = 0;
 
 void process_output9x(void *dvoid, int bHandleShutdown)
 {
-    DESC *d = (DESC *)dvoid;
-    int cnt;
+	DESC *d = (DESC *)dvoid;
+	int cnt;
 
-    const char *cmdsave = mudstate.debug_cmd;
-    mudstate.debug_cmd = "< process_output >";
+	const char *cmdsave = mudstate.debug_cmd;
+	mudstate.debug_cmd = "< process_output >";
 
-    TBLOCK *tb = d->output_head;
+	TBLOCK *tb = d->output_head;
 
-    while (tb != NULL)
-    {
-        while (tb->hdr.nchars > 0)
-        {
-            cnt = SOCKET_WRITE(d->descriptor, tb->hdr.start, tb->hdr.nchars, 0);
-            if (IS_SOCKET_ERROR(cnt))
-            {
-                int iSocketError = SOCKET_LAST_ERROR;
-                if (  iSocketError != SOCKET_EWOULDBLOCK
+	while (tb != NULL)
+	{
+		while (tb->hdr.nchars > 0)
+		{
+			cnt = SOCKET_WRITE(d->descriptor, tb->hdr.start, tb->hdr.nchars, 0);
+			if (IS_SOCKET_ERROR(cnt))
+			{
+				int iSocketError = SOCKET_LAST_ERROR;
+				if ( iSocketError != SOCKET_EWOULDBLOCK
 #ifdef SOCKET_EAGAIN
-                   && iSocketError != SOCKET_EAGAIN
+						&& iSocketError != SOCKET_EAGAIN
 #endif // SOCKET_EAGAIN
-                   && bHandleShutdown)
-                {
-                    shutdownsock(d, R_SOCKDIED);
-                }
-                mudstate.debug_cmd = cmdsave;
-                return;
-            }
-            d->output_size -= cnt;
-            tb->hdr.nchars -= cnt;
-            tb->hdr.start += cnt;
-        }
-        TBLOCK *save = tb;
-        tb = tb->hdr.nxt;
-        MEMFREE(save);
-        save = NULL;
-        d->output_head = tb;
-        if (tb == NULL)
-        {
-            d->output_tail = NULL;
-        }
-    }
-    mudstate.debug_cmd = cmdsave;
+						&& bHandleShutdown)
+				{
+					shutdownsock(d, R_SOCKDIED);
+				}
+				mudstate.debug_cmd = cmdsave;
+				return;
+			}
+			d->output_size -= cnt;
+			tb->hdr.nchars -= cnt;
+			tb->hdr.start += cnt;
+		}
+		TBLOCK *save = tb;
+		tb = tb->hdr.nxt;
+		MEMFREE(save);
+		save = NULL;
+		d->output_head = tb;
+		if (tb == NULL)
+		{
+			d->output_tail = NULL;
+		}
+	}
+	mudstate.debug_cmd = cmdsave;
 }
 
 static int AsyncSend(DESC *d, char *buf, size_t len)
 {
-    DWORD nBytes;
+	DWORD nBytes;
 
-    // Move data from one buffer to another.
-    //
-    if (len <= SIZEOF_OVERLAPPED_BUFFERS)
-    {
-        // We can consume this buffer.
-        //
-        nBytes = static_cast<DWORD>(len);
-    }
-    else
-    {
-        // Use the entire bufer and leave the remaining data in the queue.
-        //
-        nBytes = SIZEOF_OVERLAPPED_BUFFERS;
-    }
-    memcpy(d->output_buffer, buf, nBytes);
+	// Move data from one buffer to another.
+	//
+	if (len <= SIZEOF_OVERLAPPED_BUFFERS)
+	{
+		// We can consume this buffer.
+		//
+		nBytes = static_cast<DWORD>(len);
+	}
+	else
+	{
+		// Use the entire bufer and leave the remaining data in the queue.
+		//
+		nBytes = SIZEOF_OVERLAPPED_BUFFERS;
+	}
+	memcpy(d->output_buffer, buf, nBytes);
 
-    d->OutboundOverlapped.Offset = 0;
-    d->OutboundOverlapped.OffsetHigh = 0;
+	d->OutboundOverlapped.Offset = 0;
+	d->OutboundOverlapped.OffsetHigh = 0;
 
-    BOOL bResult = WriteFile((HANDLE) d->descriptor, d->output_buffer, nBytes, NULL, &d->OutboundOverlapped);
+	BOOL bResult = WriteFile((HANDLE) d->descriptor, d->output_buffer, nBytes, NULL, &d->OutboundOverlapped);
 
-    d->bWritePending = false;
+	d->bWritePending = false;
 
-    if (!bResult)
-    {
-        DWORD dwLastError = GetLastError();
-        if (dwLastError == ERROR_IO_PENDING)
-        {
-            d->bWritePending = true;
-        }
-        else
-        {
-            if (!(d->bConnectionDropped))
-            {
-                // Do no more writes and post a notification that the descriptor should be shutdown.
-                //
-                d->bConnectionDropped = true;
-                Log.tinyprintf("AsyncSend(%d) failed with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
-                if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
-                {
-                    Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in AsyncSend" ENDLINE, GetLastError());
-                }
-            }
-            return 0;
-        }
-    }
-    return nBytes;
+	if (!bResult)
+	{
+		DWORD dwLastError = GetLastError();
+		if (dwLastError == ERROR_IO_PENDING)
+		{
+			d->bWritePending = true;
+		}
+		else
+		{
+			if (!(d->bConnectionDropped))
+			{
+				// Do no more writes and post a notification that the descriptor should be shutdown.
+				//
+				d->bConnectionDropped = true;
+				Log.tinyprintf("AsyncSend(%d) failed with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
+				if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
+				{
+					Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in AsyncSend" ENDLINE, GetLastError());
+				}
+			}
+			return 0;
+		}
+	}
+	return nBytes;
 }
 
 void process_outputNT(void *dvoid, int bHandleShutdown)
 {
-    UNUSED_PARAMETER(bHandleShutdown);
+	UNUSED_PARAMETER(bHandleShutdown);
 
-    DESC *d = (DESC *)dvoid;
+	DESC *d = (DESC *)dvoid;
 
-    // Don't write if connection dropped or a write is pending.
-    //
-    if (d->bConnectionDropped || d->bWritePending)
-    {
-        return;
-    }
+	// Don't write if connection dropped or a write is pending.
+	//
+	if (d->bConnectionDropped || d->bWritePending)
+	{
+		return;
+	}
 
-    const char *cmdsave = mudstate.debug_cmd;
-    mudstate.debug_cmd = "< process_output >";
+	const char *cmdsave = mudstate.debug_cmd;
+	mudstate.debug_cmd = "< process_output >";
 
-    TBLOCK *tb = d->output_head;
-    TBLOCK *save;
-    int cnt;
+	TBLOCK *tb = d->output_head;
+	TBLOCK *save;
+	int cnt;
 
-    if (tb != NULL)
-    {
-        while (tb->hdr.nchars == 0)
-        {
-            save = tb;
-            tb = tb->hdr.nxt;
-            MEMFREE(save);
-            save = NULL;
-            d->output_head = tb;
-            if (tb == NULL)
-            {
-                d->output_tail = NULL;
-                break;
-            }
-        }
+	if (tb != NULL)
+	{
+		while (tb->hdr.nchars == 0)
+		{
+			save = tb;
+			tb = tb->hdr.nxt;
+			MEMFREE(save);
+			save = NULL;
+			d->output_head = tb;
+			if (tb == NULL)
+			{
+				d->output_tail = NULL;
+				break;
+			}
+		}
 
-        if (tb != NULL)
-        {
-            if (tb->hdr.nchars > 0)
-            {
-                cnt = AsyncSend(d, tb->hdr.start, tb->hdr.nchars);
-                if (cnt <= 0)
-                {
-                    mudstate.debug_cmd = cmdsave;
-                    return;
-                }
-                d->output_size -= cnt;
-                tb->hdr.nchars -= cnt;
-                tb->hdr.start += cnt;
-            }
-            if (tb->hdr.nchars <= 0)
-            {
-                save = tb;
-                tb = tb->hdr.nxt;
-                MEMFREE(save);
-                save = NULL;
-                d->output_head = tb;
-                if (tb == NULL)
-                {
-                    d->output_tail = NULL;
-                }
-            }
-        }
-    }
-    mudstate.debug_cmd = cmdsave;
+		if (tb != NULL)
+		{
+			if (tb->hdr.nchars > 0)
+			{
+				cnt = AsyncSend(d, tb->hdr.start, tb->hdr.nchars);
+				if (cnt <= 0)
+				{
+					mudstate.debug_cmd = cmdsave;
+					return;
+				}
+				d->output_size -= cnt;
+				tb->hdr.nchars -= cnt;
+				tb->hdr.start += cnt;
+			}
+			if (tb->hdr.nchars <= 0)
+			{
+				save = tb;
+				tb = tb->hdr.nxt;
+				MEMFREE(save);
+				save = NULL;
+				d->output_head = tb;
+				if (tb == NULL)
+				{
+					d->output_tail = NULL;
+				}
+			}
+		}
+	}
+	mudstate.debug_cmd = cmdsave;
 }
 
 #else // WIN32
+void process_output(void *dvoid, int bHandleShutdown) {
+	DESC *d = (DESC *) dvoid;
 
-void process_output(void *dvoid, int bHandleShutdown)
-{
-    DESC *d = (DESC *)dvoid;
+	const char *cmdsave = mudstate.debug_cmd;
+	mudstate.debug_cmd = "< process_output >";
 
-    const char *cmdsave = mudstate.debug_cmd;
-    mudstate.debug_cmd = "< process_output >";
-
-    TBLOCK *tb = d->output_head;
-    while (tb != NULL)
-    {
-        while (tb->hdr.nchars > 0)
-        {
-            //int cnt = SOCKET_WRITE(d->descriptor, tb->hdr.start, tb->hdr.nchars, 0);
-        	int cnt = d->writeToSocket(tb->hdr.start, tb->hdr.nchars);
-            if (IS_SOCKET_ERROR(cnt))
-            {
-                int iSocketError = SOCKET_LAST_ERROR;
-                mudstate.debug_cmd = cmdsave;
-                if (  iSocketError != SOCKET_EWOULDBLOCK
+	TBLOCK *tb = d->output_head;
+	while (tb != NULL) {
+		while (tb->hdr.nchars > 0) {
+			//int cnt = SOCKET_WRITE(d->descriptor, tb->hdr.start, tb->hdr.nchars, 0);
+			int cnt = d->writeToSocket(tb->hdr.start, tb->hdr.nchars);
+			if (IS_SOCKET_ERROR(cnt)) {
+				int iSocketError = SOCKET_LAST_ERROR;
+				mudstate.debug_cmd = cmdsave;
+				if (iSocketError != SOCKET_EWOULDBLOCK
 #ifdef SOCKET_EAGAIN
-                   && iSocketError != SOCKET_EAGAIN
+						&& iSocketError != SOCKET_EAGAIN
 #endif // SOCKET_EAGAIN
-                   && bHandleShutdown)
-                {
-                    shutdownsock(d, R_SOCKDIED);
-                }
-                return;
-            }
-            d->output_size -= cnt;
-            tb->hdr.nchars -= cnt;
-            tb->hdr.start += cnt;
-        }
-        TBLOCK *save = tb;
-        tb = tb->hdr.nxt;
-        MEMFREE(save);
-        save = NULL;
-        d->output_head = tb;
-        if (tb == NULL)
-        {
-            d->output_tail = NULL;
-        }
-    }
+						&& bHandleShutdown) {
+					shutdownsock(d, R_SOCKDIED);
+				}
+				return;
+			}
+			d->output_size -= cnt;
+			tb->hdr.nchars -= cnt;
+			tb->hdr.start += cnt;
+		}
+		TBLOCK *save = tb;
+		tb = tb->hdr.nxt;
+		MEMFREE(save);
+		save = NULL;
+		d->output_head = tb;
+		if (tb == NULL) {
+			d->output_tail = NULL;
+		}
+	}
 
-    mudstate.debug_cmd = cmdsave;
+	mudstate.debug_cmd = cmdsave;
 }
 #endif // WIN32
-
 /*! \brief Table to quickly classify characters recieved from the wire with
  * their Telnet meaning.
  *
@@ -2620,28 +2473,27 @@ void process_output(void *dvoid, int bHandleShutdown)
  * Class  5 - DM   (0xF2)  Class  9 - WILL (0xFB)
  */
 
-static const unsigned char nvt_input_xlat_table[256] =
-{
+static const unsigned char nvt_input_xlat_table[256] = {
 //  0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F
 //
-    0,  0,  0,  0,  0,  0,  0,  0,  1,  0,  2,  0,  0,  3,  0,  0,  // 0
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 1
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 2
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 3
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 4
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 5
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 6
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  1,  // 7
+		0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 3, 0, 0,  // 0
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 1
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 2
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 3
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 4
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 5
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 6
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,  // 7
 
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 8
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // 9
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // A
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // B
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // C
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  // D
-    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  5,  // E
-    4,  5,  5,  5,  5,  5,  6,  7,  5,  5,  8,  9, 10, 11, 12, 13   // F
-};
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 8
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // 9
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // A
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // B
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // C
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // D
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5,  // E
+		4, 5, 5, 5, 5, 5, 6, 7, 5, 5, 8, 9, 10, 11, 12, 13   // F
+		};
 
 /*! \brief Table to map current telnet parsing state state and input to
  * specific actions and state changes.
@@ -2667,18 +2519,17 @@ static const unsigned char nvt_input_xlat_table[256] =
  * Action 18 - Accept Completed Sub-option and transition to Normal state.
  */
 
-static const int nvt_input_action_table[8][14] =
-{
+static const int nvt_input_action_table[8][14] = {
 //    Any   BS   LF   CR   SE  NOP  AYT   EC   SB WILL DONT   DO WONT  IAC
-    {   1,   2,   3,   0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   5  }, // Normal
-    {   4,   4,   4,   4,   4,   4,  12,   2,  10,   6,   7,   8,   9,   1  }, // Have_IAC
-    {  13,  13,  13,  13,  13,  13,  13,  13,  13,  13,  13,  13,  13,   4  }, // Have_IAC_WILL
-    {  14,  14,  14,  14,  14,  14,  14,  14,  14,  14,  14,  14,  14,   4  }, // Have_IAC_DONT
-    {  15,  15,  15,  15,  15,  15,  15,  15,  15,  15,  15,  15,  15,   4  }, // Have_IAC_DO
-    {  16,  16,  16,  16,  16,  16,  16,  16,  16,  16,  16,  16,  16,   4  }, // Have_IAC_WONT
-    {  17,  17,  17,  17,  17,  17,  17,  17,  17,  17,  17,  17,  17,  11  }, // Have_IAC_SB
-    {   0,   0,   0,   0,  18,   0,   0,   0,   0,   0,   0,   0,   0,  17  }, // Have_IAC_SB_IAC
-};
+		{ 1, 2, 3, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5 }, // Normal
+		{ 4, 4, 4, 4, 4, 4, 12, 2, 10, 6, 7, 8, 9, 1 }, // Have_IAC
+		{ 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 4 }, // Have_IAC_WILL
+		{ 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 4 }, // Have_IAC_DONT
+		{ 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 4 }, // Have_IAC_DO
+		{ 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 4 }, // Have_IAC_WONT
+		{ 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 11 }, // Have_IAC_SB
+		{ 0, 0, 0, 0, 18, 0, 0, 0, 0, 0, 0, 0, 0, 17 }, // Have_IAC_SB_IAC
+		};
 
 /*! \brief Return the other side's negotiation state.
  *
@@ -2694,21 +2545,15 @@ static const int nvt_input_action_table[8][14] =
  * \return         One of six states.
  */
 
-int HimState(DESC *d, unsigned char chOption)
-{
-    if (TELNET_NAWS == chOption)
-    {
-        return d->nvt_naws_him_state;
-    }
-    else if (TELNET_EOR == chOption)
-    {
-        return d->nvt_eor_him_state;
-    }
-    else if (TELNET_SGA == chOption)
-    {
-        return d->nvt_sga_him_state;
-    }
-    return OPTION_NO;
+int HimState(DESC *d, unsigned char chOption) {
+	if (TELNET_NAWS == chOption) {
+		return d->nvt_naws_him_state;
+	} else if (TELNET_EOR == chOption) {
+		return d->nvt_eor_him_state;
+	} else if (TELNET_SGA == chOption) {
+		return d->nvt_sga_him_state;
+	}
+	return OPTION_NO;
 }
 
 /*! \brief Return our side's negotiation state.
@@ -2725,21 +2570,15 @@ int HimState(DESC *d, unsigned char chOption)
  * \return         One of six states.
  */
 
-int UsState(DESC *d, unsigned char chOption)
-{
-    if (TELNET_NAWS == chOption)
-    {
-        return d->nvt_naws_us_state;
-    }
-    else if (TELNET_EOR == chOption)
-    {
-        return d->nvt_eor_us_state;
-    }
-    else if (TELNET_SGA == chOption)
-    {
-        return d->nvt_sga_us_state;
-    }
-    return OPTION_NO;
+int UsState(DESC *d, unsigned char chOption) {
+	if (TELNET_NAWS == chOption) {
+		return d->nvt_naws_us_state;
+	} else if (TELNET_EOR == chOption) {
+		return d->nvt_eor_us_state;
+	} else if (TELNET_SGA == chOption) {
+		return d->nvt_sga_us_state;
+	}
+	return OPTION_NO;
 }
 
 /*! \brief Change the other side's negotiation state.
@@ -2750,20 +2589,14 @@ int UsState(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-static void SetHimState(DESC *d, unsigned char chOption, int iHimState)
-{
-    if (TELNET_NAWS == chOption)
-    {
-        d->nvt_naws_him_state = iHimState;
-    }
-    else if (TELNET_EOR == chOption)
-    {
-        d->nvt_eor_him_state = iHimState;
-    }
-    else if (TELNET_SGA == chOption)
-    {
-        d->nvt_sga_him_state = iHimState;
-    }
+static void SetHimState(DESC *d, unsigned char chOption, int iHimState) {
+	if (TELNET_NAWS == chOption) {
+		d->nvt_naws_him_state = iHimState;
+	} else if (TELNET_EOR == chOption) {
+		d->nvt_eor_him_state = iHimState;
+	} else if (TELNET_SGA == chOption) {
+		d->nvt_sga_him_state = iHimState;
+	}
 }
 
 /*! \brief Change our side's negotiation state.
@@ -2774,28 +2607,19 @@ static void SetHimState(DESC *d, unsigned char chOption, int iHimState)
  * \return          None.
  */
 
-static void SetUsState(DESC *d, unsigned char chOption, int iUsState)
-{
-    if (TELNET_NAWS == chOption)
-    {
-        d->nvt_naws_us_state = iUsState;
-    }
-    else if (TELNET_EOR == chOption)
-    {
-        d->nvt_eor_us_state = iUsState;
-        if (OPTION_YES == iUsState)
-        {
-            EnableUs(d, TELNET_SGA);
-        }
-        else if (OPTION_NO == iUsState)
-        {
-            DisableUs(d, TELNET_SGA);
-        }
-    }
-    else if (TELNET_SGA == chOption)
-    {
-        d->nvt_sga_us_state = iUsState;
-    }
+static void SetUsState(DESC *d, unsigned char chOption, int iUsState) {
+	if (TELNET_NAWS == chOption) {
+		d->nvt_naws_us_state = iUsState;
+	} else if (TELNET_EOR == chOption) {
+		d->nvt_eor_us_state = iUsState;
+		if (OPTION_YES == iUsState) {
+			EnableUs(d, TELNET_SGA);
+		} else if (OPTION_NO == iUsState) {
+			DisableUs(d, TELNET_SGA);
+		}
+	} else if (TELNET_SGA == chOption) {
+		d->nvt_sga_us_state = iUsState;
+	}
 }
 
 /*! \brief Transmit a Telnet WILL sequence for the given option.
@@ -2805,11 +2629,10 @@ static void SetUsState(DESC *d, unsigned char chOption, int iUsState)
  * \return          None.
  */
 
-static void SendWill(DESC *d, unsigned char chOption)
-{
-    char aWill[3] = { NVT_IAC, NVT_WILL, 0 };
-    aWill[2] = chOption;
-    queue_write_LEN(d, aWill, sizeof(aWill));
+static void SendWill(DESC *d, unsigned char chOption) {
+	char aWill[3] = { NVT_IAC, NVT_WILL, 0 };
+	aWill[2] = chOption;
+	queue_write_LEN(d, aWill, sizeof(aWill));
 }
 
 /*! \brief Transmit a Telnet DONT sequence for the given option.
@@ -2819,11 +2642,10 @@ static void SendWill(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-static void SendDont(DESC *d, unsigned char chOption)
-{
-    char aDont[3] = { NVT_IAC, NVT_DONT, 0 };
-    aDont[2] = chOption;
-    queue_write_LEN(d, aDont, sizeof(aDont));
+static void SendDont(DESC *d, unsigned char chOption) {
+	char aDont[3] = { NVT_IAC, NVT_DONT, 0 };
+	aDont[2] = chOption;
+	queue_write_LEN(d, aDont, sizeof(aDont));
 }
 
 /*! \brief Transmit a Telnet DO sequence for the given option.
@@ -2833,11 +2655,10 @@ static void SendDont(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-static void SendDo(DESC *d, unsigned char chOption)
-{
-    char aDo[3]   = { NVT_IAC, NVT_DO,   0 };
-    aDo[2] = chOption;
-    queue_write_LEN(d, aDo, sizeof(aDo));
+static void SendDo(DESC *d, unsigned char chOption) {
+	char aDo[3] = { NVT_IAC, NVT_DO, 0 };
+	aDo[2] = chOption;
+	queue_write_LEN(d, aDo, sizeof(aDo));
 }
 
 /*! \brief Transmit a Telnet WONT sequence for the given option.
@@ -2847,11 +2668,10 @@ static void SendDo(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-static void SendWont(DESC *d, unsigned char chOption)
-{
-    char aWont[3] = { NVT_IAC, NVT_WONT, 0 };
-    aWont[2] = chOption;
-    queue_write_LEN(d, aWont, sizeof(aWont));
+static void SendWont(DESC *d, unsigned char chOption) {
+	char aWont[3] = { NVT_IAC, NVT_WONT, 0 };
+	aWont[2] = chOption;
+	queue_write_LEN(d, aWont, sizeof(aWont));
 }
 
 /*! \brief Determine whether we want a particular option on his side of the
@@ -2862,17 +2682,14 @@ static void SendWont(DESC *d, unsigned char chOption)
  * \return          Yes if we want it enabled.
  */
 
-static bool DesiredHimOption(DESC *d, unsigned char chOption)
-{
-    UNUSED_PARAMETER(d);
+static bool DesiredHimOption(DESC *d, unsigned char chOption) {
+	UNUSED_PARAMETER(d);
 
-    if (  TELNET_NAWS == chOption
-       || TELNET_EOR  == chOption
-       || TELNET_SGA  == chOption)
-    {
-        return true;
-    }
-    return false;
+	if (TELNET_NAWS == chOption || TELNET_EOR == chOption
+			|| TELNET_SGA == chOption) {
+		return true;
+	}
+	return false;
 }
 
 /*! \brief Determine whether we want a particular option on our side of the
@@ -2887,15 +2704,12 @@ static bool DesiredHimOption(DESC *d, unsigned char chOption)
  * \return          Yes if we want it enabled.
  */
 
-static bool DesiredUsOption(DESC *d, unsigned char chOption)
-{
-    if (  TELNET_EOR  == chOption
-       || (  TELNET_SGA == chOption
-          && OPTION_YES == UsState(d, TELNET_EOR)))
-    {
-        return true;
-    }
-    return false;
+static bool DesiredUsOption(DESC *d, unsigned char chOption) {
+	if (TELNET_EOR == chOption
+			|| (TELNET_SGA == chOption && OPTION_YES == UsState(d, TELNET_EOR))) {
+		return true;
+	}
+	return false;
 }
 
 /*! \brief Start the process of negotiating the enablement of an option on
@@ -2909,23 +2723,21 @@ static bool DesiredUsOption(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-void EnableHim(DESC *d, unsigned char chOption)
-{
-    switch (HimState(d, chOption))
-    {
-    case OPTION_NO:
-        SetHimState(d, chOption, OPTION_WANTYES_EMPTY);
-        SendDo(d, chOption);
-        break;
+void EnableHim(DESC *d, unsigned char chOption) {
+	switch (HimState(d, chOption)) {
+	case OPTION_NO:
+		SetHimState(d, chOption, OPTION_WANTYES_EMPTY);
+		SendDo(d, chOption);
+		break;
 
-    case OPTION_WANTNO_EMPTY:
-        SetHimState(d, chOption, OPTION_WANTNO_OPPOSITE);
-        break;
+	case OPTION_WANTNO_EMPTY:
+		SetHimState(d, chOption, OPTION_WANTNO_OPPOSITE);
+		break;
 
-    case OPTION_WANTYES_OPPOSITE:
-        SetHimState(d, chOption, OPTION_WANTYES_EMPTY);
-        break;
-    }
+	case OPTION_WANTYES_OPPOSITE:
+		SetHimState(d, chOption, OPTION_WANTYES_EMPTY);
+		break;
+	}
 }
 
 /*! \brief Start the process of negotiating the disablement of an option on
@@ -2939,23 +2751,21 @@ void EnableHim(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-void DisableHim(DESC *d, unsigned char chOption)
-{
-    switch (HimState(d, chOption))
-    {
-    case OPTION_YES:
-        SetHimState(d, chOption, OPTION_WANTNO_EMPTY);
-        SendDont(d, chOption);
-        break;
+void DisableHim(DESC *d, unsigned char chOption) {
+	switch (HimState(d, chOption)) {
+	case OPTION_YES:
+		SetHimState(d, chOption, OPTION_WANTNO_EMPTY);
+		SendDont(d, chOption);
+		break;
 
-    case OPTION_WANTNO_OPPOSITE:
-        SetHimState(d, chOption, OPTION_WANTNO_EMPTY);
-        break;
+	case OPTION_WANTNO_OPPOSITE:
+		SetHimState(d, chOption, OPTION_WANTNO_EMPTY);
+		break;
 
-    case OPTION_WANTYES_EMPTY:
-        SetHimState(d, chOption, OPTION_WANTYES_OPPOSITE);
-        break;
-    }
+	case OPTION_WANTYES_EMPTY:
+		SetHimState(d, chOption, OPTION_WANTYES_OPPOSITE);
+		break;
+	}
 }
 
 /*! \brief Start the process of negotiating the enablement of an option on
@@ -2969,23 +2779,21 @@ void DisableHim(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-void EnableUs(DESC *d, unsigned char chOption)
-{
-    switch (HimState(d, chOption))
-    {
-    case OPTION_NO:
-        SetUsState(d, chOption, OPTION_WANTYES_EMPTY);
-        SendWill(d, chOption);
-        break;
+void EnableUs(DESC *d, unsigned char chOption) {
+	switch (HimState(d, chOption)) {
+	case OPTION_NO:
+		SetUsState(d, chOption, OPTION_WANTYES_EMPTY);
+		SendWill(d, chOption);
+		break;
 
-    case OPTION_WANTNO_EMPTY:
-        SetUsState(d, chOption, OPTION_WANTNO_OPPOSITE);
-        break;
+	case OPTION_WANTNO_EMPTY:
+		SetUsState(d, chOption, OPTION_WANTNO_OPPOSITE);
+		break;
 
-    case OPTION_WANTYES_OPPOSITE:
-        SetUsState(d, chOption, OPTION_WANTYES_EMPTY);
-        break;
-    }
+	case OPTION_WANTYES_OPPOSITE:
+		SetUsState(d, chOption, OPTION_WANTYES_EMPTY);
+		break;
+	}
 }
 
 /*! \brief Start the process of negotiating the disablement of an option on
@@ -2999,23 +2807,21 @@ void EnableUs(DESC *d, unsigned char chOption)
  * \return          None.
  */
 
-void DisableUs(DESC *d, unsigned char chOption)
-{
-    switch (HimState(d, chOption))
-    {
-    case OPTION_YES:
-        SetUsState(d, chOption, OPTION_WANTNO_EMPTY);
-        SendWont(d, chOption);
-        break;
+void DisableUs(DESC *d, unsigned char chOption) {
+	switch (HimState(d, chOption)) {
+	case OPTION_YES:
+		SetUsState(d, chOption, OPTION_WANTNO_EMPTY);
+		SendWont(d, chOption);
+		break;
 
-    case OPTION_WANTNO_OPPOSITE:
-        SetUsState(d, chOption, OPTION_WANTNO_EMPTY);
-        break;
+	case OPTION_WANTNO_OPPOSITE:
+		SetUsState(d, chOption, OPTION_WANTNO_EMPTY);
+		break;
 
-    case OPTION_WANTYES_EMPTY:
-        SetUsState(d, chOption, OPTION_WANTYES_OPPOSITE);
-        break;
-    }
+	case OPTION_WANTYES_EMPTY:
+		SetUsState(d, chOption, OPTION_WANTYES_OPPOSITE);
+		break;
+	}
 }
 
 /*! \brief Begin initial telnet negotiations on a socket.
@@ -3030,15 +2836,14 @@ void DisableUs(DESC *d, unsigned char chOption)
  * \return         None.
  */
 
-void TelnetSetup(DESC *d)
-{
-    // Attempt negotation of EOR so we can use that, and if that succeeds,
-    // code elsewhere will attempt the negotation of SGA for our side as well.
-    //
-    EnableUs(d, TELNET_EOR);
-    EnableHim(d, TELNET_EOR);
-    EnableHim(d, TELNET_SGA);
-    EnableHim(d, TELNET_NAWS);
+void TelnetSetup(DESC *d) {
+	// Attempt negotation of EOR so we can use that, and if that succeeds,
+	// code elsewhere will attempt the negotation of SGA for our side as well.
+	//
+	EnableUs(d, TELNET_EOR);
+	EnableHim(d, TELNET_EOR);
+	EnableHim(d, TELNET_SGA);
+	EnableHim(d, TELNET_NAWS);
 }
 
 /*! \brief Parse raw data from network connection into command lines and
@@ -3058,393 +2863,368 @@ void TelnetSetup(DESC *d)
  * \return         None.
  */
 
-static void process_input_helper(DESC *d, char *pBytes, int nBytes)
-{
-    if (!d->raw_input)
-    {
-        d->raw_input = (CBLK *) alloc_lbuf("process_input.raw");
-        d->raw_input_at = d->raw_input->cmd;
-    }
+static void process_input_helper(DESC *d, char *pBytes, int nBytes) {
+	if (!d->raw_input) {
+		d->raw_input = (CBLK *) alloc_lbuf("process_input.raw");
+		d->raw_input_at = d->raw_input->cmd;
+	}
 
-    int nInputBytes = 0;
-    int nLostBytes  = 0;
+	int nInputBytes = 0;
+	int nLostBytes = 0;
 
-    char *p    = d->raw_input_at;
-    char *pend = d->raw_input->cmd + (LBUF_SIZE - sizeof(CBLKHDR) - 1);
+	char *p = d->raw_input_at;
+	char *pend = d->raw_input->cmd + (LBUF_SIZE - sizeof(CBLKHDR) - 1);
 
-    unsigned char *q    = d->aOption + d->nOption;
-    unsigned char *qend = d->aOption + SBUF_SIZE - 1;
+	unsigned char *q = d->aOption + d->nOption;
+	unsigned char *qend = d->aOption + SBUF_SIZE - 1;
 
-    int n = nBytes;
-    while (n--)
-    {
-        unsigned char ch = (unsigned char)*pBytes;
-        int iAction = nvt_input_action_table[d->raw_input_state][nvt_input_xlat_table[ch]];
-        switch (iAction)
-        {
-        case 1:
-            // Action 1 - Accept CHR(X).
-            //
-            if (mux_isprint(ch))
-            {
-                if (p < pend)
-                {
-                    *p++ = ch;
-                    nInputBytes++;
-                }
-                else
-                {
-                    nLostBytes++;
-                }
-            }
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+	int n = nBytes;
+	while (n--) {
+		unsigned char ch = (unsigned char) *pBytes;
+		int iAction =
+				nvt_input_action_table[d->raw_input_state][nvt_input_xlat_table[ch]];
+		switch (iAction) {
+		case 1:
+			// Action 1 - Accept CHR(X).
+			//
+			if (mux_isprint(ch))
+			{
+				if (p < pend)
+				{
+					*p++ = ch;
+					nInputBytes++;
+				}
+				else
+				{
+					nLostBytes++;
+				}
+			}
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 0:
-            // Action 0 - Nothing.
-            //
-            break;
+			case 0:
+			// Action 0 - Nothing.
+			//
+			break;
 
-        case 2:
-            // Action 2 - Erase Character.
-            //
-            if (NVT_DEL == ch)
-            {
-                queue_string(d, "\b \b");
-            }
-            else
-            {
-                queue_string(d, " \b");
-            }
+			case 2:
+			// Action 2 - Erase Character.
+			//
+			if (NVT_DEL == ch)
+			{
+				queue_string(d, "\b \b");
+			}
+			else
+			{
+				queue_string(d, " \b");
+			}
 
-            if (p > d->raw_input->cmd)
-            {
-                // The character we took back.
-                //
-                nInputBytes -= 1;
-                p--;
-            }
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+			if (p > d->raw_input->cmd)
+			{
+				// The character we took back.
+				//
+				nInputBytes -= 1;
+				p--;
+			}
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 3:
-            // Action  3 - Accept Line.
-            //
-            *p = '\0';
-            if (d->raw_input->cmd < p)
-            {
-                save_command(d, d->raw_input);
-                d->raw_input = (CBLK *) alloc_lbuf("process_input.raw");
+			case 3:
+			// Action  3 - Accept Line.
+			//
+			*p = '\0';
+			if (d->raw_input->cmd < p)
+			{
+				save_command(d, d->raw_input);
+				d->raw_input = (CBLK *) alloc_lbuf("process_input.raw");
 
-                p = d->raw_input_at = d->raw_input->cmd;
-                pend = d->raw_input->cmd + (LBUF_SIZE - sizeof(CBLKHDR) - 1);
-            }
-            break;
+				p = d->raw_input_at = d->raw_input->cmd;
+				pend = d->raw_input->cmd + (LBUF_SIZE - sizeof(CBLKHDR) - 1);
+			}
+			break;
 
-        case 4:
-            // Action 4 - Transition to the Normal state.
-            //
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+			case 4:
+			// Action 4 - Transition to the Normal state.
+			//
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 5:
-            // Action  5 - Transition to Have_IAC state.
-            //
-            d->raw_input_state = NVT_IS_HAVE_IAC;
-            break;
+			case 5:
+			// Action  5 - Transition to Have_IAC state.
+			//
+			d->raw_input_state = NVT_IS_HAVE_IAC;
+			break;
 
-        case 6:
-            // Action 6 - Transition to the Have_IAC_WILL state.
-            //
-            d->raw_input_state = NVT_IS_HAVE_IAC_WILL;
-            break;
+			case 6:
+			// Action 6 - Transition to the Have_IAC_WILL state.
+			//
+			d->raw_input_state = NVT_IS_HAVE_IAC_WILL;
+			break;
 
-        case 7:
-            // Action  7 - Transition to the Have_IAC_DONT state.
-            //
-            d->raw_input_state = NVT_IS_HAVE_IAC_DONT;
-            break;
+			case 7:
+			// Action  7 - Transition to the Have_IAC_DONT state.
+			//
+			d->raw_input_state = NVT_IS_HAVE_IAC_DONT;
+			break;
 
-        case 8:
-            // Action  8 - Transition to the Have_IAC_DO state.
-            //
-            d->raw_input_state = NVT_IS_HAVE_IAC_DO;
-            break;
+			case 8:
+			// Action  8 - Transition to the Have_IAC_DO state.
+			//
+			d->raw_input_state = NVT_IS_HAVE_IAC_DO;
+			break;
 
-        case 9:
-            // Action  9 - Transition to the Have_IAC_WONT state.
-            //
-            d->raw_input_state = NVT_IS_HAVE_IAC_WONT;
-            break;
+			case 9:
+			// Action  9 - Transition to the Have_IAC_WONT state.
+			//
+			d->raw_input_state = NVT_IS_HAVE_IAC_WONT;
+			break;
 
-        case 10:
-            // Action 10 - Transition to the Have_IAC_SB state.
-            //
-            q = d->aOption;
-            d->raw_input_state = NVT_IS_HAVE_IAC_SB;
-            break;
+			case 10:
+			// Action 10 - Transition to the Have_IAC_SB state.
+			//
+			q = d->aOption;
+			d->raw_input_state = NVT_IS_HAVE_IAC_SB;
+			break;
 
-        case 11:
-            // Action 11 - Transition to the Have_IAC_SB_IAC state.
-            //
-            d->raw_input_state = NVT_IS_HAVE_IAC_SB_IAC;
-            break;
+			case 11:
+			// Action 11 - Transition to the Have_IAC_SB_IAC state.
+			//
+			d->raw_input_state = NVT_IS_HAVE_IAC_SB_IAC;
+			break;
 
-        case 12:
-            // Action 12 - Respond to IAC AYT and return to the Normal state.
-            //
-            queue_string(d, "\r\n[Yes]\r\n");
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+			case 12:
+			// Action 12 - Respond to IAC AYT and return to the Normal state.
+			//
+			queue_string(d, "\r\n[Yes]\r\n");
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 13:
-            // Action 13 - Respond to IAC WILL X
-            //
-            switch (HimState(d, ch))
-            {
-            case OPTION_NO:
-                if (DesiredHimOption(d, ch))
-                {
-                    SetHimState(d, ch, OPTION_YES);
-                    SendDo(d, ch);
-                }
-                else
-                {
-                    SendDont(d, ch);
-                }
-                break;
+			case 13:
+			// Action 13 - Respond to IAC WILL X
+			//
+			switch (HimState(d, ch))
+			{
+				case OPTION_NO:
+				if (DesiredHimOption(d, ch))
+				{
+					SetHimState(d, ch, OPTION_YES);
+					SendDo(d, ch);
+				}
+				else
+				{
+					SendDont(d, ch);
+				}
+				break;
 
-            case OPTION_WANTNO_EMPTY:
-                SetHimState(d, ch, OPTION_NO);
-                break;
+				case OPTION_WANTNO_EMPTY:
+				SetHimState(d, ch, OPTION_NO);
+				break;
 
-            case OPTION_WANTYES_OPPOSITE:
-                SetHimState(d, ch, OPTION_WANTNO_EMPTY);
-                SendDont(d, ch);
-                break;
+				case OPTION_WANTYES_OPPOSITE:
+				SetHimState(d, ch, OPTION_WANTNO_EMPTY);
+				SendDont(d, ch);
+				break;
 
-            default:
-                SetHimState(d, ch, OPTION_YES);
-                break;
-            }
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+				default:
+				SetHimState(d, ch, OPTION_YES);
+				break;
+			}
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 14:
-            // Action 14 - Respond to IAC DONT X
-            //
-            switch (UsState(d, ch))
-            {
-            case OPTION_YES:
-                SetUsState(d, ch, OPTION_NO);
-                SendWont(d, ch);
-                break;
+			case 14:
+			// Action 14 - Respond to IAC DONT X
+			//
+			switch (UsState(d, ch))
+			{
+				case OPTION_YES:
+				SetUsState(d, ch, OPTION_NO);
+				SendWont(d, ch);
+				break;
 
-            case OPTION_WANTNO_OPPOSITE:
-                SetUsState(d, ch, OPTION_WANTYES_EMPTY);
-                SendWill(d, ch);
-                break;
+				case OPTION_WANTNO_OPPOSITE:
+				SetUsState(d, ch, OPTION_WANTYES_EMPTY);
+				SendWill(d, ch);
+				break;
 
-            default:
-                SetUsState(d, ch, OPTION_NO);
-                break;
-            }
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+				default:
+				SetUsState(d, ch, OPTION_NO);
+				break;
+			}
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 15:
-            // Action 15 - Respond to IAC DO X
-            //
-            switch (UsState(d, ch))
-            {
-            case OPTION_NO:
-                if (DesiredUsOption(d, ch))
-                {
-                    SetUsState(d, ch, OPTION_YES);
-                    SendWill(d, ch);
-                }
-                else
-                {
-                    SendWont(d, ch);
-                }
-                break;
+			case 15:
+			// Action 15 - Respond to IAC DO X
+			//
+			switch (UsState(d, ch))
+			{
+				case OPTION_NO:
+				if (DesiredUsOption(d, ch))
+				{
+					SetUsState(d, ch, OPTION_YES);
+					SendWill(d, ch);
+				}
+				else
+				{
+					SendWont(d, ch);
+				}
+				break;
 
-            case OPTION_WANTNO_EMPTY:
-                SetUsState(d, ch, OPTION_NO);
-                break;
+				case OPTION_WANTNO_EMPTY:
+				SetUsState(d, ch, OPTION_NO);
+				break;
 
-            case OPTION_WANTYES_OPPOSITE:
-                SetUsState(d, ch, OPTION_WANTNO_EMPTY);
-                SendWont(d, ch);
-                break;
+				case OPTION_WANTYES_OPPOSITE:
+				SetUsState(d, ch, OPTION_WANTNO_EMPTY);
+				SendWont(d, ch);
+				break;
 
-            default:
-                SetUsState(d, ch, OPTION_YES);
-                break;
-            }
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+				default:
+				SetUsState(d, ch, OPTION_YES);
+				break;
+			}
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 16:
-            // Action 16 - Respond to IAC WONT X
-            //
-            // Ignore.
-            //
-            switch (HimState(d, ch))
-            {
-            case OPTION_NO:
-                break;
+			case 16:
+			// Action 16 - Respond to IAC WONT X
+			//
+			// Ignore.
+			//
+			switch (HimState(d, ch))
+			{
+				case OPTION_NO:
+				break;
 
-            case OPTION_YES:
-                SetHimState(d, ch, OPTION_NO);
-                SendDont(d, ch);
-                break;
+				case OPTION_YES:
+				SetHimState(d, ch, OPTION_NO);
+				SendDont(d, ch);
+				break;
 
-            case OPTION_WANTNO_OPPOSITE:
-                SetHimState(d, ch, OPTION_WANTYES_EMPTY);
-                SendDo(d, ch);
-                break;
+				case OPTION_WANTNO_OPPOSITE:
+				SetHimState(d, ch, OPTION_WANTYES_EMPTY);
+				SendDo(d, ch);
+				break;
 
-            default:
-                SetHimState(d, ch, OPTION_NO);
-                break;
-            }
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
+				default:
+				SetHimState(d, ch, OPTION_NO);
+				break;
+			}
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
 
-        case 17:
-            // Action 17 - Accept CHR(X) for Sub-Option (and transition to Have_IAC_SB state).
-            //
-            d->raw_input_state = NVT_IS_HAVE_IAC_SB;
-            if (  d->aOption <= q
-               && q < qend)
-            {
-                *q++ = ch;
-            }
-            break;
+			case 17:
+			// Action 17 - Accept CHR(X) for Sub-Option (and transition to Have_IAC_SB state).
+			//
+			d->raw_input_state = NVT_IS_HAVE_IAC_SB;
+			if ( d->aOption <= q
+					&& q < qend)
+			{
+				*q++ = ch;
+			}
+			break;
 
-        case 18:
-            // Action 18 - Accept Completed Sub-option and transition to Normal state.
-            //
-            if (  d->aOption < q
-               && q < qend)
-            {
-                size_t m = q - d->aOption;
-                switch (d->aOption[0])
-                {
-                case TELNET_NAWS:
-                    if (m == 5)
-                    {
-                        d->width  = (d->aOption[1] << 8 ) | d->aOption[2];
-                        d->height = (d->aOption[3] << 8 ) | d->aOption[4];
-                    }
-                    break;
-                }
-            }
-            q = d->aOption;
-            d->raw_input_state = NVT_IS_NORMAL;
-            break;
-        }
-        pBytes++;
-    }
+			case 18:
+			// Action 18 - Accept Completed Sub-option and transition to Normal state.
+			//
+			if ( d->aOption < q
+					&& q < qend)
+			{
+				size_t m = q - d->aOption;
+				switch (d->aOption[0])
+				{
+					case TELNET_NAWS:
+					if (m == 5)
+					{
+						d->width = (d->aOption[1] << 8 ) | d->aOption[2];
+						d->height = (d->aOption[3] << 8 ) | d->aOption[4];
+					}
+					break;
+				}
+			}
+			q = d->aOption;
+			d->raw_input_state = NVT_IS_NORMAL;
+			break;
+		}
+		pBytes++;
+	}
 
-    if (  d->raw_input->cmd < p
-       && p <= pend)
-    {
-        d->raw_input_at = p;
-    }
-    else
-    {
-        free_lbuf(d->raw_input);
-        d->raw_input = NULL;
-        d->raw_input_at = NULL;
-    }
+	if (d->raw_input->cmd < p && p <= pend) {
+		d->raw_input_at = p;
+	} else {
+		free_lbuf(d->raw_input);
+		d->raw_input = NULL;
+		d->raw_input_at = NULL;
+	}
 
-    if ( d->aOption <= q
-       && q < qend)
-    {
-        d->nOption = q - d->aOption;
-    }
-    else
-    {
-        d->nOption = 0;
-    }
-    d->input_tot  += nBytes;
-    d->input_size += nInputBytes;
-    d->input_lost += nLostBytes;
+	if (d->aOption <= q && q < qend) {
+		d->nOption = q - d->aOption;
+	} else {
+		d->nOption = 0;
+	}
+	d->input_tot += nBytes;
+	d->input_size += nInputBytes;
+	d->input_lost += nLostBytes;
 }
 
-bool process_input(DESC *d)
-{
-    const char *cmdsave = mudstate.debug_cmd;
-    mudstate.debug_cmd = "< process_input >";
+bool process_input(DESC *d) {
+	const char *cmdsave = mudstate.debug_cmd;
+	mudstate.debug_cmd = "< process_input >";
 
-    char buf[LBUF_SIZE];
-    //int got = SOCKET_READ(d->getSocket(), buf, sizeof(buf), 0);
-    int got = d->readFromSocket(buf, sizeof(buf));
+	char buf[LBUF_SIZE];
+	//int got = SOCKET_READ(d->getSocket(), buf, sizeof(buf), 0);
+	int got = d->readFromSocket(buf, sizeof(buf));
 
-    // TODO: Edit this
-    if (IS_SOCKET_ERROR(got) || got == 0)
-    {
-        int iSocketError = SOCKET_LAST_ERROR;
-        mudstate.debug_cmd = cmdsave;
-        if (  IS_SOCKET_ERROR(got)
-           && (  iSocketError == SOCKET_EWOULDBLOCK
+	// TODO: Edit this
+	if (IS_SOCKET_ERROR(got) || got == 0) {
+		int iSocketError = SOCKET_LAST_ERROR;
+		mudstate.debug_cmd = cmdsave;
+		if (IS_SOCKET_ERROR(got) && (iSocketError == SOCKET_EWOULDBLOCK
 #ifdef SOCKET_EAGAIN
-              || iSocketError == SOCKET_EAGAIN
+				|| iSocketError == SOCKET_EAGAIN
 #endif // SOCKET_EAGAIN
-              || iSocketError == SOCKET_EINTR))
-        {
-            return true;
-        }
-        return false;
-    }
-    process_input_helper(d, buf, got);
-    mudstate.debug_cmd = cmdsave;
-    return true;
+				|| iSocketError == SOCKET_EINTR)) {
+			return true;
+		}
+		return false;
+	}
+	process_input_helper(d, buf, got);
+	mudstate.debug_cmd = cmdsave;
+	return true;
 }
 
-void close_sockets(bool emergency, const char *message)
-{
-    DESC *d, *dnext;
+void close_sockets(bool emergency, const char *message) {
+	DESC *d, *dnext;
 
-    DESC_SAFEITER_ALL(d, dnext)
-    {
-        if (emergency)
-        {
-            //SOCKET_WRITE(d->getSocket(), message, strlen(message), 0);
-            d->writeToSocket(message, strlen(message));
-            if (IS_SOCKET_ERROR(shutdown(d->getSocket(), SD_BOTH)))
-            {
-                log_perror("NET", "FAIL", NULL, "shutdown");
-            }
-            if (SOCKET_CLOSE(d->getSocket()) == 0)
-            {
-                DebugTotalSockets--;
-            }
-        }
-        else
-        {
-            queue_string(d, message);
-            queue_write_LEN(d, "\r\n", 2);
-            shutdownsock(d, R_GOING_DOWN);
-        }
-    }
-    for (int i = 0; i < nMainGamePorts; i++)
-    {
-        if (SOCKET_CLOSE(aMainGamePorts[i].socket) == 0)
-        {
-            DebugTotalSockets--;
-        }
-        aMainGamePorts[i].socket = INVALID_SOCKET;
-    }
+	DESC_SAFEITER_ALL(d, dnext)
+	{
+		if (emergency) {
+			//SOCKET_WRITE(d->getSocket(), message, strlen(message), 0);
+			d->writeToSocket(message, strlen(message));
+			if (IS_SOCKET_ERROR(shutdown(d->getSocket(), SD_BOTH))) {
+				log_perror("NET", "FAIL", NULL, "shutdown");
+			}
+			if (SOCKET_CLOSE(d->getSocket()) == 0) {
+				DebugTotalSockets--;
+			}
+		} else {
+			queue_string(d, message);
+			queue_write_LEN(d, "\r\n", 2);
+			shutdownsock(d, R_GOING_DOWN);
+		}
+	}
+	for (int i = 0; i < nMainGamePorts; i++) {
+		if (SOCKET_CLOSE(aMainGamePorts[i].socket) == 0) {
+			DebugTotalSockets--;
+		}
+		aMainGamePorts[i].socket = INVALID_SOCKET;
+	}
 }
 
-void emergency_shutdown(void)
-{
-    close_sockets(true, "Going down - Bye");
+void emergency_shutdown(void) {
+	close_sockets(true, "Going down - Bye");
 }
-
 
 // ---------------------------------------------------------------------------
 // Signal handling routines.
@@ -3454,213 +3234,207 @@ void emergency_shutdown(void)
 #else // _SGI_SOURCE
 #define CAST_SIGNAL_FUNC
 #endif // _SGI_SOURCE
-
 // The purpose of the following code is support the case where sys_siglist is
 // is not part of the environment. This is the case for some Unix platforms
 // and also for Win32.
 //
-typedef struct
-{
-    int         iSignal;
-    const char *szSignal;
+typedef struct {
+	int iSignal;
+	const char *szSignal;
 } SIGNALTYPE, *PSIGNALTYPE;
 
-const SIGNALTYPE aSigTypes[] =
-{
+const SIGNALTYPE aSigTypes[] = {
 #ifdef SIGHUP
-    // Hangup detected on controlling terminal or death of controlling process.
-    //
-    { SIGHUP,   "SIGHUP"},
+		// Hangup detected on controlling terminal or death of controlling process.
+		//
+		{ SIGHUP, "SIGHUP" },
 #endif // SIGHUP
 #ifdef SIGINT
-    // Interrupt from keyboard.
-    //
-    { SIGINT,   "SIGINT"},
+		// Interrupt from keyboard.
+		//
+		{ SIGINT, "SIGINT" },
 #endif // SIGINT
 #ifdef SIGQUIT
-    // Quit from keyboard.
-    //
-    { SIGQUIT,  "SIGQUIT"},
+		// Quit from keyboard.
+		//
+		{ SIGQUIT, "SIGQUIT" },
 #endif // SIGQUIT
 #ifdef SIGILL
-    // Illegal Instruction.
-    //
-    { SIGILL,   "SIGILL"},
+		// Illegal Instruction.
+		//
+		{ SIGILL, "SIGILL" },
 #endif // SIGILL
 #ifdef SIGTRAP
-    // Trace/breakpoint trap.
-    //
-    { SIGTRAP,  "SIGTRAP"},
+		// Trace/breakpoint trap.
+		//
+		{ SIGTRAP, "SIGTRAP" },
 #endif // SIGTRAP
 #if defined(SIGABRT)
-    // Abort signal from abort(3).
-    //
-    { SIGABRT,  "SIGABRT"},
+		// Abort signal from abort(3).
+		//
+		{ SIGABRT, "SIGABRT" },
 #elif defined(SIGIOT)
 #define SIGABRT SIGIOT
-    // Abort signal from abort(3).
-    //
-    { SIGIOT,   "SIGIOT"},
+		// Abort signal from abort(3).
+		//
+		{	SIGIOT, "SIGIOT"},
 #endif // SIGABRT
 #ifdef SIGEMT
-    { SIGEMT,   "SIGEMT"},
+		{	SIGEMT, "SIGEMT"},
 #endif // SIGEMT
 #ifdef SIGFPE
-    // Floating-point exception.
-    //
-    { SIGFPE,   "SIGFPE"},
+		// Floating-point exception.
+		//
+		{ SIGFPE, "SIGFPE" },
 #endif // SIGFPE
 #ifdef SIGKILL
-    // Kill signal. Not catchable.
-    //
-    { SIGKILL,  "SIGKILL"},
+		// Kill signal. Not catchable.
+		//
+		{ SIGKILL, "SIGKILL" },
 #endif // SIGKILL
 #ifdef SIGSEGV
-    // Invalid memory reference.
-    //
-    { SIGSEGV,  "SIGSEGV"},
+		// Invalid memory reference.
+		//
+		{ SIGSEGV, "SIGSEGV" },
 #endif // SIGSEGV
 #ifdef SIGPIPE
-    // Broken pipe: write to pipe with no readers.
-    //
-    { SIGPIPE,  "SIGPIPE"},
+		// Broken pipe: write to pipe with no readers.
+		//
+		{ SIGPIPE, "SIGPIPE" },
 #endif // SIGPIPE
 #ifdef SIGALRM
-    // Timer signal from alarm(2).
-    //
-    { SIGALRM,  "SIGALRM"},
+		// Timer signal from alarm(2).
+		//
+		{ SIGALRM, "SIGALRM" },
 #endif // SIGALRM
 #ifdef SIGTERM
-    // Termination signal.
-    //
-    { SIGTERM,  "SIGTERM"},
+		// Termination signal.
+		//
+		{ SIGTERM, "SIGTERM" },
 #endif // SIGTERM
 #ifdef SIGBREAK
-    // Ctrl-Break.
-    //
-    { SIGBREAK, "SIGBREAK"},
+		// Ctrl-Break.
+		//
+		{	SIGBREAK, "SIGBREAK"},
 #endif // SIGBREAK
 #ifdef SIGUSR1
-    // User-defined signal 1.
-    //
-    { SIGUSR1,  "SIGUSR1"},
+		// User-defined signal 1.
+		//
+		{ SIGUSR1, "SIGUSR1" },
 #endif // SIGUSR1
 #ifdef SIGUSR2
-    // User-defined signal 2.
-    //
-    { SIGUSR2,  "SIGUSR2"},
+		// User-defined signal 2.
+		//
+		{ SIGUSR2, "SIGUSR2" },
 #endif // SIGUSR2
 #if defined(SIGCHLD)
-    // Child stopped or terminated.
-    //
-    { SIGCHLD,  "SIGCHLD"},
+		// Child stopped or terminated.
+		//
+		{ SIGCHLD, "SIGCHLD" },
 #elif defined(SIGCLD)
 #define SIGCHLD SIGCLD
-    // Child stopped or terminated.
-    //
-    { SIGCLD,   "SIGCLD"},
+		// Child stopped or terminated.
+		//
+		{	SIGCLD, "SIGCLD"},
 #endif // SIGCHLD
 #ifdef SIGCONT
-    // Continue if stopped.
-    //
-    { SIGCONT,  "SIGCONT"},
+		// Continue if stopped.
+		//
+		{ SIGCONT, "SIGCONT" },
 #endif // SIGCONT
 #ifdef SIGSTOP
-    // Stop process. Not catchable.
-    //
-    { SIGSTOP,  "SIGSTOP"},
+		// Stop process. Not catchable.
+		//
+		{ SIGSTOP, "SIGSTOP" },
 #endif // SIGSTOP
 #ifdef SIGTSTP
-    // Stop typed at tty
-    //
-    { SIGTSTP,  "SIGTSTP"},
+		// Stop typed at tty
+		//
+		{ SIGTSTP, "SIGTSTP" },
 #endif // SIGTSTP
 #ifdef SIGTTIN
-    // tty input for background process.
-    //
-    { SIGTTIN,  "SIGTTIN"},
+		// tty input for background process.
+		//
+		{ SIGTTIN, "SIGTTIN" },
 #endif // SIGTTIN
 #ifdef SIGTTOU
-    // tty output for background process.
-    //
-    { SIGTTOU,  "SIGTTOU"},
+		// tty output for background process.
+		//
+		{ SIGTTOU, "SIGTTOU" },
 #endif // SIGTTOU
 #ifdef SIGBUS
-    // Bus error (bad memory access).
-    //
-    { SIGBUS,   "SIGBUS"},
+		// Bus error (bad memory access).
+		//
+		{ SIGBUS, "SIGBUS" },
 #endif // SIGBUS
 #ifdef SIGPROF
-    // Profiling timer expired.
-    //
-    { SIGPROF,  "SIGPROF"},
+		// Profiling timer expired.
+		//
+		{ SIGPROF, "SIGPROF" },
 #endif // SIGPROF
 #ifdef SIGSYS
-    // Bad argument to routine (SVID).
-    //
-    { SIGSYS,   "SIGSYS"},
+		// Bad argument to routine (SVID).
+		//
+		{ SIGSYS, "SIGSYS" },
 #endif // SIGSYS
 #ifdef SIGURG
-    // Urgent condition on socket (4.2 BSD).
-    //
-    { SIGURG,   "SIGURG"},
+		// Urgent condition on socket (4.2 BSD).
+		//
+		{ SIGURG, "SIGURG" },
 #endif // SIGURG
 #ifdef SIGVTALRM
-    // Virtual alarm clock (4.2 BSD).
-    //
-    { SIGVTALRM, "SIGVTALRM"},
+		// Virtual alarm clock (4.2 BSD).
+		//
+		{ SIGVTALRM, "SIGVTALRM" },
 #endif // SIGVTALRM
 #ifdef SIGXCPU
-    // CPU time limit exceeded (4.2 BSD).
-    //
-    { SIGXCPU,  "SIGXCPU"},
+		// CPU time limit exceeded (4.2 BSD).
+		//
+		{ SIGXCPU, "SIGXCPU" },
 #endif // SIGXCPU
 #ifdef SIGXFSZ
-    // File size limit exceeded (4.2 BSD).
-    //
-    { SIGXFSZ,  "SIGXFSZ"},
+		// File size limit exceeded (4.2 BSD).
+		//
+		{ SIGXFSZ, "SIGXFSZ" },
 #endif // SIGXFSZ
 #ifdef SIGSTKFLT
-    // Stack fault on coprocessor.
-    //
-    { SIGSTKFLT, "SIGSTKFLT"},
+		// Stack fault on coprocessor.
+		//
+		{ SIGSTKFLT, "SIGSTKFLT" },
 #endif // SIGSTKFLT
 #if defined(SIGIO)
-    // I/O now possible (4.2 BSD). File lock lost.
-    //
-    { SIGIO,    "SIGIO"},
+		// I/O now possible (4.2 BSD). File lock lost.
+		//
+		{ SIGIO, "SIGIO" },
 #elif defined(SIGPOLL)
 #define SIGIO SIGPOLL
-    // Pollable event (Sys V).
-    //
-    { SIGPOLL,  "SIGPOLL"},
+		// Pollable event (Sys V).
+		//
+		{	SIGPOLL, "SIGPOLL"},
 #endif // SIGIO
 #ifdef SIGLOST
-    { SIGLOST,  "SIGLOST"},
+		{	SIGLOST, "SIGLOST"},
 #endif // SIGLOST
 #if defined(SIGPWR)
-    // Power failure (System V).
-    //
-    { SIGPWR,   "SIGPWR"},
+		// Power failure (System V).
+		//
+		{ SIGPWR, "SIGPWR" },
 #elif defined(SIGINFO)
 #define SIGPWR SIGINFO
-    // Power failure (System V).
-    //
-    { SIGINFO,  "SIGINFO"},
+		// Power failure (System V).
+		//
+		{	SIGINFO, "SIGINFO"},
 #endif // SIGPWR
 #ifdef SIGWINCH
-    // Window resize signal (4.3 BSD, Sun).
-    //
-    { SIGWINCH, "SIGWINCH"},
+		// Window resize signal (4.3 BSD, Sun).
+		//
+		{ SIGWINCH, "SIGWINCH" },
 #endif // SIGWINCH
-    { 0,        "SIGZERO" },
-    { -1, NULL }
-};
+		{ 0, "SIGZERO" }, { -1, NULL } };
 
-typedef struct
-{
-    const char *pShortName;
-    const char *pLongName;
+typedef struct {
+	const char *pShortName;
+	const char *pLongName;
 } MUX_SIGNAMES;
 
 static MUX_SIGNAMES signames[NSIG];
@@ -3670,506 +3444,456 @@ static MUX_SIGNAMES signames[NSIG];
 #elif defined(SYS_SIGLIST_DECLARED)
 #define SysSigNames sys_siglist
 #endif // HAVE_SYS_SIGNAME
+void BuildSignalNamesTable(void) {
+	int i;
+	for (i = 0; i < NSIG; i++) {
+		signames[i].pShortName = NULL;
+		signames[i].pLongName = NULL;
+	}
 
-void BuildSignalNamesTable(void)
-{
-    int i;
-    for (i = 0; i < NSIG; i++)
-    {
-        signames[i].pShortName = NULL;
-        signames[i].pLongName  = NULL;
-    }
-
-    const SIGNALTYPE *pst = aSigTypes;
-    while (pst->szSignal)
-    {
-        int sig = pst->iSignal;
-        if (  0 <= sig
-           && sig < NSIG)
-        {
-            MUX_SIGNAMES *tsn = &signames[sig];
-            if (tsn->pShortName == NULL)
-            {
-                tsn->pShortName = pst->szSignal;
+	const SIGNALTYPE *pst = aSigTypes;
+	while (pst->szSignal) {
+		int sig = pst->iSignal;
+		if (0 <= sig && sig < NSIG) {
+			MUX_SIGNAMES *tsn = &signames[sig];
+			if (tsn->pShortName == NULL) {
+				tsn->pShortName = pst->szSignal;
 #ifndef WIN32
-                if (sig == SIGUSR1)
-                {
-                    tsn->pLongName = "Restart server";
-                }
-                else if (sig == SIGUSR2)
-                {
-                    tsn->pLongName = "Drop flatfile";
-                }
+				if (sig == SIGUSR1) {
+					tsn->pLongName = "Restart server";
+				} else if (sig == SIGUSR2) {
+					tsn->pLongName = "Drop flatfile";
+				}
 #endif // WIN32
 #ifdef SysSigNames
-                if (  tsn->pLongName == NULL
-                   && SysSigNames[sig]
-                   && strcmp(tsn->pShortName, SysSigNames[sig]) != 0)
-                {
-                    tsn->pLongName = SysSigNames[sig];
-                }
+				if ( tsn->pLongName == NULL
+						&& SysSigNames[sig]
+						&& strcmp(tsn->pShortName, SysSigNames[sig]) != 0)
+				{
+					tsn->pLongName = SysSigNames[sig];
+				}
 #endif // SysSigNames
-            }
-        }
-        pst++;
-    }
-    for (i = 0; i < NSIG; i++)
-    {
-        MUX_SIGNAMES *tsn = &signames[i];
-        if (tsn->pShortName == NULL)
-        {
+			}
+		}
+		pst++;
+	}
+	for (i = 0; i < NSIG; i++) {
+		MUX_SIGNAMES *tsn = &signames[i];
+		if (tsn->pShortName == NULL) {
 #ifdef SysSigNames
-            if (SysSigNames[i])
-            {
-                tsn->pLongName = SysSigNames[i];
-            }
+			if (SysSigNames[i])
+			{
+				tsn->pLongName = SysSigNames[i];
+			}
 #endif // SysSigNames
-
-            // This is the only non-const memory case.
-            //
-            tsn->pShortName = StringClone(tprintf("SIG%03d", i));
-        }
-    }
+			// This is the only non-const memory case.
+			//
+			tsn->pShortName = StringClone(tprintf("SIG%03d", i));
+		}
+	}
 }
 
-static void unset_signals(void)
-{
-    const SIGNALTYPE *pst = aSigTypes;
-    while (pst->szSignal)
-    {
-        int sig = pst->iSignal;
-        signal(sig, SIG_DFL);
-    }
+static void unset_signals(void) {
+	const SIGNALTYPE *pst = aSigTypes;
+	while (pst->szSignal) {
+		int sig = pst->iSignal;
+		signal(sig, SIG_DFL );
+	}
 }
 
-static void check_panicking(int sig)
-{
-    // If we are panicking, turn off signal catching and resignal.
-    //
-    if (mudstate.panicking)
-    {
-        unset_signals();
+static void check_panicking(int sig) {
+	// If we are panicking, turn off signal catching and resignal.
+	//
+	if (mudstate.panicking) {
+		unset_signals();
 #ifdef WIN32
-        UNUSED_PARAMETER(sig);
-        abort();
+		UNUSED_PARAMETER(sig);
+		abort();
 #else // WIN32
-        kill(game_pid, sig);
+		kill(game_pid, sig);
 #endif // WIN32
-    }
-    mudstate.panicking = true;
+	}
+	mudstate.panicking = true;
 }
 
-static char *SignalDesc(int iSignal)
-{
-    static char buff[LBUF_SIZE];
-    char *bufc = buff;
-    safe_str(signames[iSignal].pShortName, buff, &bufc);
-    if (signames[iSignal].pLongName)
-    {
-        safe_str(" (", buff, &bufc);
-        safe_str(signames[iSignal].pLongName, buff, &bufc);
-        safe_chr(')', buff, &bufc);
-    }
-    *bufc = '\0';
-    return buff;
+static char *SignalDesc(int iSignal) {
+	static char buff[LBUF_SIZE];
+	char *bufc = buff;
+	safe_str(signames[iSignal].pShortName, buff, &bufc);
+	if (signames[iSignal].pLongName) {
+		safe_str(" (", buff, &bufc);
+		safe_str(signames[iSignal].pLongName, buff, &bufc);
+		safe_chr(')', buff, &bufc);
+	}
+	*bufc = '\0';
+	return buff;
 }
 
-static void log_signal(int iSignal)
-{
-    STARTLOG(LOG_PROBLEMS, "SIG", "CATCH");
-    log_text("Caught signal ");
-    log_text(SignalDesc(iSignal));
-    ENDLOG;
+static void log_signal(int iSignal) {
+	STARTLOG(LOG_PROBLEMS, "SIG", "CATCH");
+	log_text("Caught signal ");
+	log_text(SignalDesc(iSignal));
+	ENDLOG
+	;
 }
 
 #ifndef WIN32
-static void log_signal_ignore(int iSignal)
-{
-    STARTLOG(LOG_PROBLEMS, "SIG", "CATCH");
-    log_text("Caught signal and ignored signal ");
-    log_text(SignalDesc(iSignal));
-    log_text(" because server just came up.");
-    ENDLOG;
+static void log_signal_ignore(int iSignal) {
+	STARTLOG(LOG_PROBLEMS, "SIG", "CATCH");
+	log_text("Caught signal and ignored signal ");
+	log_text(SignalDesc(iSignal));
+	log_text(" because server just came up.");
+	ENDLOG
+	;
 }
 
-void LogStatBuf(int stat_buf, const char *Name)
-{
-    STARTLOG(LOG_ALWAYS, "NET", Name);
-    if (WIFEXITED(stat_buf))
-    {
-        Log.tinyprintf("process exited unexpectedly with exit status %d.", WEXITSTATUS(stat_buf));
-    }
-    else if (WIFSIGNALED(stat_buf))
-    {
-        Log.tinyprintf("process was terminated with signal %s.", SignalDesc(WTERMSIG(stat_buf)));
-    }
-    else
-    {
-        log_text("process ended unexpectedly.");
-    }
-    ENDLOG;
+void LogStatBuf(int stat_buf, const char *Name) {
+	STARTLOG(LOG_ALWAYS, "NET", Name);
+	if (WIFEXITED(stat_buf)) {
+		Log.tinyprintf("process exited unexpectedly with exit status %d.",
+				WEXITSTATUS(stat_buf));
+	} else if (WIFSIGNALED(stat_buf)) {
+		Log.tinyprintf("process was terminated with signal %s.",
+				SignalDesc(WTERMSIG(stat_buf)));
+	} else {
+		log_text("process ended unexpectedly.");
+	}
+	ENDLOG
+	;
 }
 #endif
 
-static RETSIGTYPE DCL_CDECL sighandler(int sig)
-{
+static RETSIGTYPE DCL_CDECL sighandler(int sig) {
 #ifndef WIN32
-    int stat_buf;
-    pid_t child;
+	int stat_buf;
+	pid_t child;
 #endif // !WIN32
-
-    switch (sig)
-    {
+	switch (sig) {
 #ifndef WIN32
-    case SIGUSR1:
-        if (mudstate.bCanRestart)
-        {
-            log_signal(sig);
-            do_restart(GOD, GOD, GOD, 0);
-        }
-        else
-        {
-            log_signal_ignore(sig);
-        }
-        break;
+	case SIGUSR1:
+		if (mudstate.bCanRestart) {
+			log_signal(sig);
+			do_restart(GOD, GOD, GOD, 0);
+		} else {
+			log_signal_ignore(sig);
+		}
+		break;
 
-    case SIGUSR2:
+	case SIGUSR2:
 
-        // Drop a flatfile.
-        //
-        log_signal(sig);
-        raw_broadcast(0, "Caught signal %s requesting a flatfile @dump. Please wait.", SignalDesc(sig));
-        dump_database_internal(DUMP_I_SIGNAL);
-        break;
+		// Drop a flatfile.
+		//
+		log_signal(sig);
+		raw_broadcast(0,
+				"Caught signal %s requesting a flatfile @dump. Please wait.",
+				SignalDesc(sig));
+		dump_database_internal(DUMP_I_SIGNAL);
+		break;
 
-    case SIGCHLD:
+	case SIGCHLD:
 
-        // Change in child status.
-        //
+		// Change in child status.
+		//
 #ifndef SIGNAL_SIGCHLD_BRAINDAMAGE
-        signal(SIGCHLD, CAST_SIGNAL_FUNC sighandler);
+		signal(SIGCHLD, CAST_SIGNAL_FUNC sighandler);
 #endif // !SIGNAL_SIGCHLD_BRAINDAMAGE
+		while ((child = waitpid(0, &stat_buf, WNOHANG)) > 0) {
+			if (WIFEXITED(stat_buf) || WIFSIGNALED(stat_buf)) {
+				if (child == slave_pid) {
+					// The reverse-DNS slave process ended unexpectedly.
+					//
+					CleanUpSlaveSocket();
+					slave_pid = 0;
 
-        while ((child = waitpid(0, &stat_buf, WNOHANG)) > 0)
-        {
-            if (  WIFEXITED(stat_buf)
-               || WIFSIGNALED(stat_buf))
-            {
-                if (child == slave_pid)
-                {
-                    // The reverse-DNS slave process ended unexpectedly.
-                    //
-                    CleanUpSlaveSocket();
-                    slave_pid = 0;
+					LogStatBuf(stat_buf, "SLAVE");
 
-                    LogStatBuf(stat_buf, "SLAVE");
-
-                    continue;
-                }
+					continue;
+				}
 #ifdef QUERY_SLAVE
-                else if (child == sqlslave_pid)
-                {
-                    // The SQL slave process ended unexpectedly.
-                    //
-                    CleanUpSQLSlaveSocket();
-                    sqlslave_pid = 0;
+				else if (child == sqlslave_pid)
+				{
+					// The SQL slave process ended unexpectedly.
+					//
+					CleanUpSQLSlaveSocket();
+					sqlslave_pid = 0;
 
-                    LogStatBuf(stat_buf, "QUERY");
+					LogStatBuf(stat_buf, "QUERY");
 
-                    continue;
-                }
+					continue;
+				}
 #endif // QUERY_SLAVE
-                else if (  mudconf.fork_dump
-                        && mudstate.dumping)
-                {
-                    mudstate.dumped = child;
-                    if (mudstate.dumper == mudstate.dumped)
-                    {
-                        // The dumping process finished.
-                        //
-                        mudstate.dumper  = 0;
-                        mudstate.dumped  = 0;
-                    }
-                    else
-                    {
-                        // The dumping process finished before we could
-                        // obtain its process id from fork().
-                        //
-                    }
-                    mudstate.dumping = false;
-                    local_dump_complete_signal();
+				else if (mudconf.fork_dump && mudstate.dumping) {
+					mudstate.dumped = child;
+					if (mudstate.dumper == mudstate.dumped) {
+						// The dumping process finished.
+						//
+						mudstate.dumper = 0;
+						mudstate.dumped = 0;
+					} else {
+						// The dumping process finished before we could
+						// obtain its process id from fork().
+						//
+					}
+					mudstate.dumping = false;
+					local_dump_complete_signal();
 
-                    continue;
-                }
-            }
+					continue;
+				}
+			}
 
-            log_signal(sig);
-            LogStatBuf(stat_buf, "UKNWN");
+			log_signal(sig);
+			LogStatBuf(stat_buf, "UKNWN");
 
-            STARTLOG(LOG_PROBLEMS, "SIG", "DEBUG");
+			STARTLOG(LOG_PROBLEMS, "SIG", "DEBUG");
 #ifdef QUERY_SLAVE
-            Log.tinyprintf("mudstate.dumper=%d, child=%d, slave_pid=%d, sqlslave_pid=%d" ENDLINE,
-                mudstate.dumper, child, slave_pid, sqlslave_pid);
+			Log.tinyprintf("mudstate.dumper=%d, child=%d, slave_pid=%d, sqlslave_pid=%d" ENDLINE,
+					mudstate.dumper, child, slave_pid, sqlslave_pid);
 #else
-            Log.tinyprintf("mudstate.dumper=%d, child=%d, slave_pid=%d" ENDLINE,
-                mudstate.dumper, child, slave_pid);
+			Log.tinyprintf("mudstate.dumper=%d, child=%d, slave_pid=%d" ENDLINE,
+					mudstate.dumper, child, slave_pid);
 #endif // QUERY_SLAVE
-            ENDLOG;
-        }
-        break;
+			ENDLOG
+			;
+		}
+		break;
 
-    case SIGHUP:
+	case SIGHUP:
 
-        // Perform a database dump.
-        //
-        log_signal(sig);
-        extern void dispatch_DatabaseDump(void *pUnused, int iUnused);
-        scheduler.CancelTask(dispatch_DatabaseDump, 0, 0);
-        mudstate.dump_counter.GetUTC();
-        scheduler.DeferTask(mudstate.dump_counter, PRIORITY_SYSTEM, dispatch_DatabaseDump, 0, 0);
-        break;
+		// Perform a database dump.
+		//
+		log_signal(sig);
+		extern void dispatch_DatabaseDump(void *pUnused, int iUnused);
+		scheduler.CancelTask(dispatch_DatabaseDump, 0, 0);
+		mudstate.dump_counter.GetUTC();
+		scheduler.DeferTask(mudstate.dump_counter, PRIORITY_SYSTEM,
+				dispatch_DatabaseDump, 0, 0);
+		break;
 
 #ifdef HAVE_SETITIMER
-    case SIGPROF:
+	case SIGPROF:
 
-        // Softcode is running longer than is reasonable.  Apply the brakes.
-        //
-        log_signal(sig);
-        MuxAlarm.Signal();
-        break;
+		// Softcode is running longer than is reasonable.  Apply the brakes.
+		//
+		log_signal(sig);
+		MuxAlarm.Signal();
+		break;
 #endif
 
 #endif // !WIN32
+	case SIGINT:
 
-    case SIGINT:
-
-        // Log + ignore
-        //
-        log_signal(sig);
-        break;
+		// Log + ignore
+		//
+		log_signal(sig);
+		break;
 
 #ifndef WIN32
-    case SIGQUIT:
+	case SIGQUIT:
 #endif // !WIN32
-    case SIGTERM:
+	case SIGTERM:
 #ifdef SIGXCPU
-    case SIGXCPU:
+	case SIGXCPU:
 #endif // SIGXCPU
-        // Time for a normal and short-winded shutdown.
-        //
-        check_panicking(sig);
-        log_signal(sig);
-        raw_broadcast(0, "GAME: Caught signal %s, exiting.", SignalDesc(sig));
-        mudstate.shutdown_flag = true;
-        break;
+		// Time for a normal and short-winded shutdown.
+		//
+		check_panicking(sig);
+		log_signal(sig);
+		raw_broadcast(0, "GAME: Caught signal %s, exiting.", SignalDesc(sig));
+		mudstate.shutdown_flag = true;
+		break;
 
-    case SIGILL:
-    case SIGFPE:
-    case SIGSEGV:
+	case SIGILL:
+	case SIGFPE:
+	case SIGSEGV:
 #ifndef WIN32
-    case SIGTRAP:
+	case SIGTRAP:
 #ifdef SIGXFSZ
-    case SIGXFSZ:
+	case SIGXFSZ:
 #endif // SIGXFSZ
 #ifdef SIGEMT
-    case SIGEMT:
+		case SIGEMT:
 #endif // SIGEMT
 #ifdef SIGBUS
-    case SIGBUS:
+	case SIGBUS:
 #endif // SIGBUS
 #ifdef SIGSYS
-    case SIGSYS:
+	case SIGSYS:
 #endif // SIGSYS
 #endif // !WIN32
+		// Panic save + restart.
+		//
+		Log.Flush();
+		check_panicking(sig);
+		log_signal(sig);
+		report();
 
-        // Panic save + restart.
-        //
-        Log.Flush();
-        check_panicking(sig);
-        log_signal(sig);
-        report();
-
-        local_presync_database_sigsegv();
+		local_presync_database_sigsegv();
 #ifndef MEMORY_BASED
-        al_store();
+		al_store();
 #endif
-        pcache_sync();
-        SYNC;
+		pcache_sync();
+		SYNC;
 
-        if (  mudconf.sig_action != SA_EXIT
-           && mudstate.bCanRestart)
-        {
-            raw_broadcast
-            (  0,
-               "GAME: Fatal signal %s caught, restarting.",
-               SignalDesc(sig)
-            );
+		if (mudconf.sig_action != SA_EXIT && mudstate.bCanRestart) {
+			raw_broadcast(0, "GAME: Fatal signal %s caught, restarting.",
+					SignalDesc(sig));
 
-            // There is no older DB. It's a fiction. Our only choice is
-            // between unamed attributes and named ones. We go with what we
-            // got.
-            //
-            dump_database_internal(DUMP_I_RESTART);
-            SYNC;
-            CLOSE;
+			// There is no older DB. It's a fiction. Our only choice is
+			// between unamed attributes and named ones. We go with what we
+			// got.
+			//
+			dump_database_internal(DUMP_I_RESTART);
+			SYNC;
+			CLOSE;
 #ifdef WIN32
-            unset_signals();
-            signal(sig, SIG_DFL);
-            WSACleanup();
-            exit(12345678);
+			unset_signals();
+			signal(sig, SIG_DFL);
+			WSACleanup();
+			exit(12345678);
 #else // WIN32
-            CleanUpSlaveSocket();
-            CleanUpSlaveProcess();
+			CleanUpSlaveSocket();
+			CleanUpSlaveProcess();
 
-            // Try our best to dump a core first
-            //
-            if (!fork())
-            {
-                // We are the broken parent. Die.
-                //
-                unset_signals();
-                exit(1);
-            }
+			// Try our best to dump a core first
+			//
+			if (!fork()) {
+				// We are the broken parent. Die.
+				//
+				unset_signals();
+				exit(1);
+			}
 
-            // We are the reproduced child with a slightly better chance.
-            //
-            dump_restart_db();
+			// We are the reproduced child with a slightly better chance.
+			//
+			dump_restart_db();
 #ifdef GAME_DOOFERMUX
-            execl("bin/netmux", mudconf.mud_name, "-c", mudconf.config_file, "-p", mudconf.pid_file, "-e", mudconf.log_dir, NULL);
+			execl("bin/netmux", mudconf.mud_name, "-c", mudconf.config_file, "-p", mudconf.pid_file, "-e", mudconf.log_dir, NULL);
 #else // GAME_DOOFERMUX
-            execl("bin/netmux", "netmux", "-c", mudconf.config_file, "-p", mudconf.pid_file, "-e", mudconf.log_dir, NULL);
+			execl("bin/netmux", "netmux", "-c", mudconf.config_file, "-p",
+					mudconf.pid_file, "-e", mudconf.log_dir, NULL);
 #endif // GAME_DOOFERMUX
-            break;
+			break;
 #endif // WIN32
-        }
-        else
-        {
+		} else {
 #ifdef WIN32
-            WSACleanup();
+			WSACleanup();
 #endif // WIN32
+			unset_signals();
+			signal(sig, SIG_DFL );
+			exit(1);
+		}
+		break;
 
-            unset_signals();
-            signal(sig, SIG_DFL);
-            exit(1);
-        }
-        break;
+	case SIGABRT:
 
-    case SIGABRT:
-
-        // Coredump.
-        //
-        check_panicking(sig);
-        log_signal(sig);
-        report();
+		// Coredump.
+		//
+		check_panicking(sig);
+		log_signal(sig);
+		report();
 
 #ifdef WIN32
-        WSACleanup();
+		WSACleanup();
 #endif // WIN32
-
-        unset_signals();
-        signal(sig, SIG_DFL);
-        exit(1);
-    }
-    signal(sig, CAST_SIGNAL_FUNC sighandler);
-    mudstate.panicking = 0;
+		unset_signals();
+		signal(sig, SIG_DFL );
+		exit(1);
+	}
+	signal(sig, CAST_SIGNAL_FUNC sighandler);
+	mudstate.panicking = 0;
 }
 
-NAMETAB sigactions_nametab[] =
-{
-    {"exit",        3,  0,  SA_EXIT},
-    {"default",     1,  0,  SA_DFLT},
-    { NULL,         0,  0,  0}
-};
+NAMETAB sigactions_nametab[] = { { "exit", 3, 0, SA_EXIT }, { "default", 1, 0,
+		SA_DFLT }, { NULL, 0, 0, 0 } };
 
-void set_signals(void)
-{
+void set_signals(void) {
 #ifndef WIN32
-    sigset_t sigs;
+	sigset_t sigs;
 
-    // We have to reset our signal mask, because of the possibility
-    // that we triggered a restart on a SIGUSR1. If we did so, then
-    // the signal became blocked, and stays blocked, since control
-    // never returns to the caller; i.e., further attempts to send
-    // a SIGUSR1 would fail.
-    //
+	// We have to reset our signal mask, because of the possibility
+	// that we triggered a restart on a SIGUSR1. If we did so, then
+	// the signal became blocked, and stays blocked, since control
+	// never returns to the caller; i.e., further attempts to send
+	// a SIGUSR1 would fail.
+	//
 #undef sigfillset
 #undef sigprocmask
-    sigfillset(&sigs);
-    sigprocmask(SIG_UNBLOCK, &sigs, NULL);
+	sigfillset(&sigs);
+	sigprocmask(SIG_UNBLOCK, &sigs, NULL);
 #endif // !WIN32
-
-    signal(SIGINT,  CAST_SIGNAL_FUNC sighandler);
-    signal(SIGTERM, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGILL,  CAST_SIGNAL_FUNC sighandler);
-    signal(SIGSEGV, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGABRT, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGFPE,  SIG_IGN);
+	signal(SIGINT, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGTERM, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGILL, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGSEGV, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGABRT, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGFPE, SIG_IGN );
 
 #ifndef WIN32
-    signal(SIGCHLD, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGHUP,  CAST_SIGNAL_FUNC sighandler);
-    signal(SIGQUIT, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGPIPE, SIG_IGN);
-    signal(SIGUSR1, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGUSR2, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGTRAP, CAST_SIGNAL_FUNC sighandler);
-    signal(SIGILL,  CAST_SIGNAL_FUNC sighandler);
+	signal(SIGCHLD, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGHUP, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGQUIT, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGPIPE, SIG_IGN );
+	signal(SIGUSR1, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGUSR2, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGTRAP, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGILL, CAST_SIGNAL_FUNC sighandler);
 #ifdef HAVE_SETITIMER
-    signal(SIGPROF,  CAST_SIGNAL_FUNC sighandler);
+	signal(SIGPROF, CAST_SIGNAL_FUNC sighandler);
 #endif
 
 #ifdef SIGXCPU
-    signal(SIGXCPU, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGXCPU, CAST_SIGNAL_FUNC sighandler);
 #endif // SIGXCPU
 #ifdef SIGFSZ
-    signal(SIGXFSZ, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGXFSZ, CAST_SIGNAL_FUNC sighandler);
 #endif // SIGFSZ
 #ifdef SIGEMT
-    signal(SIGEMT, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGEMT, CAST_SIGNAL_FUNC sighandler);
 #endif // SIGEMT
 #ifdef SIGBUS
-    signal(SIGBUS, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGBUS, CAST_SIGNAL_FUNC sighandler);
 #endif // SIGBUS
 #ifdef SIGSYS
-    signal(SIGSYS, CAST_SIGNAL_FUNC sighandler);
+	signal(SIGSYS, CAST_SIGNAL_FUNC sighandler);
 #endif // SIGSYS
 #endif // !WIN32
 }
 
-void list_system_resources(dbref player)
-{
-    char buffer[80];
+void list_system_resources(dbref player) {
+	char buffer[80];
 
-    int nTotal = 0;
-    notify(player, "System Resources");
+	int nTotal = 0;
+	notify(player, "System Resources");
 
-    mux_sprintf(buffer, sizeof(buffer), "Total Open Files: %ld", DebugTotalFiles);
-    notify(player, buffer);
-    nTotal += DebugTotalFiles;
+	mux_sprintf(buffer, sizeof(buffer), "Total Open Files: %ld",
+			DebugTotalFiles);
+	notify(player, buffer);
+	nTotal += DebugTotalFiles;
 
-    mux_sprintf(buffer, sizeof(buffer), "Total Sockets: %ld", DebugTotalSockets);
-    notify(player, buffer);
-    nTotal += DebugTotalSockets;
+	mux_sprintf(buffer, sizeof(buffer), "Total Sockets: %ld",
+			DebugTotalSockets);
+	notify(player, buffer);
+	nTotal += DebugTotalSockets;
 
 #ifdef WIN32
-    mux_sprintf(buffer, sizeof(buffer), "Total Threads: %ld", DebugTotalThreads);
-    notify(player, buffer);
-    nTotal += DebugTotalThreads;
+	mux_sprintf(buffer, sizeof(buffer), "Total Threads: %ld", DebugTotalThreads);
+	notify(player, buffer);
+	nTotal += DebugTotalThreads;
 
-    mux_sprintf(buffer, sizeof(buffer), "Total Semaphores: %ld", DebugTotalSemaphores);
-    notify(player, buffer);
-    nTotal += DebugTotalSemaphores;
+	mux_sprintf(buffer, sizeof(buffer), "Total Semaphores: %ld", DebugTotalSemaphores);
+	notify(player, buffer);
+	nTotal += DebugTotalSemaphores;
 #endif // WIN32
-
-    mux_sprintf(buffer, sizeof(buffer), "Total Handles (sum of above): %d", nTotal);
-    notify(player, buffer);
+	mux_sprintf(buffer, sizeof(buffer), "Total Handles (sum of above): %d",
+			nTotal);
+	notify(player, buffer);
 
 #ifdef WIN32
-    for (int i = 0; i < NUM_SLAVE_THREADS; i++)
-    {
-        mux_sprintf(buffer, sizeof(buffer), "Thread %d at line %u", i+1, SlaveThreadInfo[i].iDoing);
-        notify(player, buffer);
-    }
+	for (int i = 0; i < NUM_SLAVE_THREADS; i++)
+	{
+		mux_sprintf(buffer, sizeof(buffer), "Thread %d at line %u", i+1, SlaveThreadInfo[i].iDoing);
+		notify(player, buffer);
+	}
 #endif // WIN32
 }
 
@@ -4181,526 +3905,516 @@ void list_system_resources(dbref player)
 //
 static DWORD WINAPI MUDListenThread(LPVOID pVoid)
 {
-    PortInfo *Port = (PortInfo *)pVoid;
+	PortInfo *Port = (PortInfo *)pVoid;
 
-    SOCKADDR_IN SockAddr;
-    int         nLen;
-    BOOL        b;
+	SOCKADDR_IN SockAddr;
+	int nLen;
+	BOOL b;
 
-    struct descriptor_data * d;
+	struct descriptor_data * d;
 
-    Log.tinyprintf("Starting NT-style listening on port %d" ENDLINE, Port->port);
+	Log.tinyprintf("Starting NT-style listening on port %d" ENDLINE, Port->port);
 
-    //
-    // Loop forever accepting connections
-    //
-    for (;;)
-    {
-        //
-        // Block on accept()
-        //
-        nLen = sizeof(SOCKADDR_IN);
-        SOCKET socketClient = accept(Port->socket, (LPSOCKADDR) &SockAddr,
-            &nLen);
+	//
+	// Loop forever accepting connections
+	//
+	for (;;)
+	{
+		//
+		// Block on accept()
+		//
+		nLen = sizeof(SOCKADDR_IN);
+		SOCKET socketClient = accept(Port->socket, (LPSOCKADDR) &SockAddr,
+				&nLen);
 
-        if (socketClient == INVALID_SOCKET)
-        {
-            // parent thread closes the listening socket
-            // when it wants this thread to stop.
-            //
-            break;
-        }
+		if (socketClient == INVALID_SOCKET)
+		{
+			// parent thread closes the listening socket
+			// when it wants this thread to stop.
+			//
+			break;
+		}
 
-        DebugTotalSockets++;
-        if (site_check(SockAddr.sin_addr, mudstate.access_list) == H_FORBIDDEN)
-        {
-            STARTLOG(LOG_NET | LOG_SECURITY, "NET", "SITE");
-            unsigned short us = ntohs(SockAddr.sin_port);
-            Log.tinyprintf("[%d/%s] Connection refused.  (Remote port %d)",
-                socketClient, inet_ntoa(SockAddr.sin_addr), us);
-            ENDLOG;
+		DebugTotalSockets++;
+		if (site_check(SockAddr.sin_addr, mudstate.access_list) == H_FORBIDDEN)
+		{
+			STARTLOG(LOG_NET | LOG_SECURITY, "NET", "SITE");
+			unsigned short us = ntohs(SockAddr.sin_port);
+			Log.tinyprintf("[%d/%s] Connection refused.  (Remote port %d)",
+					socketClient, inet_ntoa(SockAddr.sin_addr), us);
+			ENDLOG;
 
-            // The following are commented out for thread-safety, but
-            // ordinarily, they would occur at this time.
-            //
-            //SiteMonSend(socketClient, inet_ntoa(SockAddr.sin_addr), NULL,
-            //            "Connection refused");
-            //fcache_rawdump(socketClient, FC_CONN_SITE);
+			// The following are commented out for thread-safety, but
+			// ordinarily, they would occur at this time.
+			//
+			//SiteMonSend(socketClient, inet_ntoa(SockAddr.sin_addr), NULL,
+			//            "Connection refused");
+			//fcache_rawdump(socketClient, FC_CONN_SITE);
 
-            shutdown(socketClient, SD_BOTH);
-            if (closesocket(socketClient) == 0)
-            {
-                DebugTotalSockets--;
-            }
-            continue;
-        }
+			shutdown(socketClient, SD_BOTH);
+			if (closesocket(socketClient) == 0)
+			{
+				DebugTotalSockets--;
+			}
+			continue;
+		}
 
-        // Make slave request
-        //
-        // Go take control of the stack, but don't bother if it takes
-        // longer than 5 seconds to do it.
-        //
-        if (bSlaveBooted && (WAIT_OBJECT_0 == WaitForSingleObject(hSlaveRequestStackSemaphore, 5000)))
-        {
-            // We have control of the stack. Skip the request if the stack is full.
-            //
-            if (iSlaveRequest < SLAVE_REQUEST_STACK_SIZE)
-            {
-                // There is room on the stack, so make the request.
-                //
-                SlaveRequests[iSlaveRequest].sa_in = SockAddr;
-                SlaveRequests[iSlaveRequest].port_in = mudconf.ports.pi[0];
-                iSlaveRequest++;
-                ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
+		// Make slave request
+		//
+		// Go take control of the stack, but don't bother if it takes
+		// longer than 5 seconds to do it.
+		//
+		if (bSlaveBooted && (WAIT_OBJECT_0 == WaitForSingleObject(hSlaveRequestStackSemaphore, 5000)))
+		{
+			// We have control of the stack. Skip the request if the stack is full.
+			//
+			if (iSlaveRequest < SLAVE_REQUEST_STACK_SIZE)
+			{
+				// There is room on the stack, so make the request.
+				//
+				SlaveRequests[iSlaveRequest].sa_in = SockAddr;
+				SlaveRequests[iSlaveRequest].port_in = mudconf.ports.pi[0];
+				iSlaveRequest++;
+				ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
 
-                // Wake up a single slave thread. Event automatically resets itself.
-                //
-                ReleaseSemaphore(hSlaveThreadsSemaphore, 1, NULL);
-            }
-            else
-            {
-                // No room on the stack, so skip it.
-                //
-                ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
-            }
-        }
-        d = initializesock(socketClient, &SockAddr);
+				// Wake up a single slave thread. Event automatically resets itself.
+				//
+				ReleaseSemaphore(hSlaveThreadsSemaphore, 1, NULL);
+			}
+			else
+			{
+				// No room on the stack, so skip it.
+				//
+				ReleaseSemaphore(hSlaveRequestStackSemaphore, 1, NULL);
+			}
+		}
+		d = initializesock(socketClient, &SockAddr);
 
-        // Add this socket to the IO completion port.
-        //
-        CompletionPort = CreateIoCompletionPort((HANDLE)socketClient, CompletionPort, (MUX_ULONG_PTR) d, 1);
+		// Add this socket to the IO completion port.
+		//
+		CompletionPort = CreateIoCompletionPort((HANDLE)socketClient, CompletionPort, (MUX_ULONG_PTR) d, 1);
 
-        if (!CompletionPort)
-        {
-            Log.tinyprintf("Error %ld on CreateIoCompletionPort for socket %ld" ENDLINE, GetLastError(), socketClient);
-            shutdownsock_brief(d);
-            continue;
-        }
+		if (!CompletionPort)
+		{
+			Log.tinyprintf("Error %ld on CreateIoCompletionPort for socket %ld" ENDLINE, GetLastError(), socketClient);
+			shutdownsock_brief(d);
+			continue;
+		}
 
-        TelnetSetup(d);
+		TelnetSetup(d);
 
-        if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_welcome))
-        {
-            Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (read)" ENDLINE, GetLastError());
-            shutdownsock_brief(d);
-            continue;
-        }
+		if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_welcome))
+		{
+			Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (read)" ENDLINE, GetLastError());
+			shutdownsock_brief(d);
+			continue;
+		}
 
-        // Do the first read
-        //
-        b = ReadFile((HANDLE) socketClient, d->input_buffer, sizeof(d->input_buffer), NULL, &d->InboundOverlapped);
+		// Do the first read
+		//
+		b = ReadFile((HANDLE) socketClient, d->input_buffer, sizeof(d->input_buffer), NULL, &d->InboundOverlapped);
 
-        if (!b && GetLastError() != ERROR_IO_PENDING)
-        {
-            // Post a notification that the descriptor should be shutdown, and do no more IO.
-            //
-            d->bConnectionDropped = true;
-            Log.tinyprintf("ProcessWindowsTCP(%d) cannot queue read request with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, GetLastError());
-            if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
-            {
-                Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (initial read)" ENDLINE, GetLastError());
-            }
-        }
-    }
-    Log.tinyprintf("End of NT-style listening on port %d" ENDLINE, Port->port);
-    return 1;
+		if (!b && GetLastError() != ERROR_IO_PENDING)
+		{
+			// Post a notification that the descriptor should be shutdown, and do no more IO.
+			//
+			d->bConnectionDropped = true;
+			Log.tinyprintf("ProcessWindowsTCP(%d) cannot queue read request with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, GetLastError());
+			if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
+			{
+				Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (initial read)" ENDLINE, GetLastError());
+			}
+		}
+	}
+	Log.tinyprintf("End of NT-style listening on port %d" ENDLINE, Port->port);
+	return 1;
 }
-
 
 void Task_FreeDescriptor(void *arg_voidptr, int arg_Integer)
 {
-    UNUSED_PARAMETER(arg_Integer);
+	UNUSED_PARAMETER(arg_Integer);
 
-    DESC *d = (DESC *)arg_voidptr;
-    if (d)
-    {
-        EnterCriticalSection(&csDescriptorList);
-        ndescriptors--;
-        freeqs(d);
-        free_desc(d);
-        LeaveCriticalSection(&csDescriptorList);
-    }
+	DESC *d = (DESC *)arg_voidptr;
+	if (d)
+	{
+		EnterCriticalSection(&csDescriptorList);
+		ndescriptors--;
+		freeqs(d);
+		free_desc(d);
+		LeaveCriticalSection(&csDescriptorList);
+	}
 }
 
 void Task_DeferredClose(void *arg_voidptr, int arg_Integer)
 {
-    UNUSED_PARAMETER(arg_Integer);
+	UNUSED_PARAMETER(arg_Integer);
 
-    DESC *d = (DESC *)arg_voidptr;
-    if (d)
-    {
-        d->bConnectionDropped = true;
+	DESC *d = (DESC *)arg_voidptr;
+	if (d)
+	{
+		d->bConnectionDropped = true;
 
-        // Cancel any pending reads or writes on this socket
-        //
-        if (!fpCancelIo((HANDLE) d->descriptor))
-        {
-            Log.tinyprintf("Error %ld on CancelIo" ENDLINE, GetLastError());
-        }
+		// Cancel any pending reads or writes on this socket
+		//
+		if (!fpCancelIo((HANDLE) d->descriptor))
+		{
+			Log.tinyprintf("Error %ld on CancelIo" ENDLINE, GetLastError());
+		}
 
-        shutdown(d->descriptor, SD_BOTH);
-        if (SOCKET_CLOSE(d->descriptor) == 0)
-        {
-            DebugTotalSockets--;
-        }
-        d->descriptor = INVALID_SOCKET;
+		shutdown(d->descriptor, SD_BOTH);
+		if (SOCKET_CLOSE(d->descriptor) == 0)
+		{
+			DebugTotalSockets--;
+		}
+		d->descriptor = INVALID_SOCKET;
 
-        // Post a notification that it is safe to free the descriptor
-        // we can't free the descriptor here (below) as there may be some
-        // queued completed IOs that will crash when they refer to a descriptor
-        // (d) that has been freed.
-        //
-        if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_aborted))
-        {
-            Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in shutdownsock" ENDLINE, GetLastError());
-        }
-    }
+		// Post a notification that it is safe to free the descriptor
+		// we can't free the descriptor here (below) as there may be some
+		// queued completed IOs that will crash when they refer to a descriptor
+		// (d) that has been freed.
+		//
+		if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_aborted))
+		{
+			Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in shutdownsock" ENDLINE, GetLastError());
+		}
+	}
 }
 
-
 /*
-This is called from within shovechars when it needs to see if any IOs have
-completed for the Windows NT version.
+ This is called from within shovechars when it needs to see if any IOs have
+ completed for the Windows NT version.
 
-The 4 sorts of IO completions are:
+ The 4 sorts of IO completions are:
 
-1. Outstanding read completing (there should always be an outstanding read)
-2. Outstanding write completing
-3. A special "shutdown" message to tell us to shutdown the socket
-4. A special "aborted" message to tell us the socket has shut down, and we
-can now free the descriptor.
+ 1. Outstanding read completing (there should always be an outstanding read)
+ 2. Outstanding write completing
+ 3. A special "shutdown" message to tell us to shutdown the socket
+ 4. A special "aborted" message to tell us the socket has shut down, and we
+ can now free the descriptor.
 
-The latter 2 are posted by the application by PostQueuedCompletionStatus
-when it is necessary to signal these "events".
+ The latter 2 are posted by the application by PostQueuedCompletionStatus
+ when it is necessary to signal these "events".
 
-The reason for posting the special messages is to shut down sockets in an
-orderly way.
+ The reason for posting the special messages is to shut down sockets in an
+ orderly way.
 
-*/
+ */
 
 void ProcessWindowsTCP(DWORD dwTimeout)
 {
-    LPOVERLAPPED lpo;
-    DWORD nbytes;
-    DESC *d;
+	LPOVERLAPPED lpo;
+	DWORD nbytes;
+	DESC *d;
 
-    for ( ; ; dwTimeout = 0)
-    {
-        // pull out the next completed IO
-        //
-        BOOL b = GetQueuedCompletionStatus(CompletionPort, &nbytes, (MUX_PULONG_PTR) &d, &lpo, dwTimeout);
+	for (;; dwTimeout = 0)
+	{
+		// pull out the next completed IO
+		//
+		BOOL b = GetQueuedCompletionStatus(CompletionPort, &nbytes, (MUX_PULONG_PTR) &d, &lpo, dwTimeout);
 
-        if (!b)
-        {
-            DWORD dwLastError = GetLastError();
+		if (!b)
+		{
+			DWORD dwLastError = GetLastError();
 
-            // Ignore timeouts and cancelled IOs
-            //
-            switch (dwLastError)
-            {
-            case WAIT_TIMEOUT:
-                //Log.WriteString("Timeout." ENDLINE);
-                return;
+			// Ignore timeouts and cancelled IOs
+			//
+			switch (dwLastError)
+			{
+				case WAIT_TIMEOUT:
+				//Log.WriteString("Timeout." ENDLINE);
+				return;
 
-            case ERROR_OPERATION_ABORTED:
-                //Log.WriteString("Operation Aborted." ENDLINE);
-                continue;
+				case ERROR_OPERATION_ABORTED:
+				//Log.WriteString("Operation Aborted." ENDLINE);
+				continue;
 
-            default:
-                if (!(d->bConnectionDropped))
-                {
-                    // bad IO - shut down this client
-                    //
-                    d->bConnectionDropped = true;
+				default:
+				if (!(d->bConnectionDropped))
+				{
+					// bad IO - shut down this client
+					//
+					d->bConnectionDropped = true;
 
-                    // Post a notification that the descriptor should be shutdown
-                    //
-                    Log.tinyprintf("ProcessWindowsTCP(%d) failed IO with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
-                    if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
-                    {
-                        Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (write)" ENDLINE, GetLastError());
-                    }
-                }
-            }
-        }
-        else if (lpo == &d->OutboundOverlapped && !d->bConnectionDropped)
-        {
-            //Log.tinyprintf("Write(%d bytes)." ENDLINE, nbytes);
+					// Post a notification that the descriptor should be shutdown
+					//
+					Log.tinyprintf("ProcessWindowsTCP(%d) failed IO with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
+					if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
+					{
+						Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (write)" ENDLINE, GetLastError());
+					}
+				}
+			}
+		}
+		else if (lpo == &d->OutboundOverlapped && !d->bConnectionDropped)
+		{
+			//Log.tinyprintf("Write(%d bytes)." ENDLINE, nbytes);
 
-            // Write completed
-            //
-            TBLOCK *tp;
-            DWORD nBytes;
+			// Write completed
+			//
+			TBLOCK *tp;
+			DWORD nBytes;
 
-            bool bNothingToWrite;
-            do
-            {
-                bNothingToWrite = true;
-                tp = d->output_head;
-                if (tp == NULL)
-                {
-                    d->bWritePending = false;
-                    break;
-                }
-                bNothingToWrite = true;
+			bool bNothingToWrite;
+			do
+			{
+				bNothingToWrite = true;
+				tp = d->output_head;
+				if (tp == NULL)
+				{
+					d->bWritePending = false;
+					break;
+				}
+				bNothingToWrite = true;
 
-                // Move data from one buffer to another.
-                //
-                if (tp->hdr.nchars <= SIZEOF_OVERLAPPED_BUFFERS)
-                {
-                    // We can consume this buffer.
-                    //
-                    nBytes = static_cast<DWORD>(tp->hdr.nchars);
-                    memcpy(d->output_buffer, tp->hdr.start, nBytes);
-                    TBLOCK *save = tp;
-                    tp = tp->hdr.nxt;
-                    MEMFREE(save);
-                    save = NULL;
-                    d->output_head = tp;
-                    if (tp == NULL)
-                    {
-                        //Log.tinyprintf("Write...%d bytes taken from a queue of %d bytes...Empty Queue, now." ENDLINE, nBytes, d->output_size);
-                        d->output_tail = NULL;
-                    }
-                    else
-                    {
-                        //Log.tinyprintf("Write...%d bytes taken from a queue of %d bytes...more buffers in Queue" ENDLINE, nBytes, d->output_size);
-                    }
-                }
-                else
-                {
-                    // Use the entire bufer and leave the remaining data in the queue.
-                    //
-                    nBytes = SIZEOF_OVERLAPPED_BUFFERS;
-                    memcpy(d->output_buffer, tp->hdr.start, nBytes);
-                    tp->hdr.nchars -= nBytes;
-                    tp->hdr.start += nBytes;
-                    //Log.tinyprintf("Write...%d bytes taken from a queue of %d bytes...buffer still has bytes" ENDLINE, nBytes, d->output_size);
-                }
-                d->output_size -= nBytes;
+				// Move data from one buffer to another.
+				//
+				if (tp->hdr.nchars <= SIZEOF_OVERLAPPED_BUFFERS)
+				{
+					// We can consume this buffer.
+					//
+					nBytes = static_cast<DWORD>(tp->hdr.nchars);
+					memcpy(d->output_buffer, tp->hdr.start, nBytes);
+					TBLOCK *save = tp;
+					tp = tp->hdr.nxt;
+					MEMFREE(save);
+					save = NULL;
+					d->output_head = tp;
+					if (tp == NULL)
+					{
+						//Log.tinyprintf("Write...%d bytes taken from a queue of %d bytes...Empty Queue, now." ENDLINE, nBytes, d->output_size);
+						d->output_tail = NULL;
+					}
+					else
+					{
+						//Log.tinyprintf("Write...%d bytes taken from a queue of %d bytes...more buffers in Queue" ENDLINE, nBytes, d->output_size);
+					}
+				}
+				else
+				{
+					// Use the entire bufer and leave the remaining data in the queue.
+					//
+					nBytes = SIZEOF_OVERLAPPED_BUFFERS;
+					memcpy(d->output_buffer, tp->hdr.start, nBytes);
+					tp->hdr.nchars -= nBytes;
+					tp->hdr.start += nBytes;
+					//Log.tinyprintf("Write...%d bytes taken from a queue of %d bytes...buffer still has bytes" ENDLINE, nBytes, d->output_size);
+				}
+				d->output_size -= nBytes;
 
-                d->OutboundOverlapped.Offset = 0;
-                d->OutboundOverlapped.OffsetHigh = 0;
+				d->OutboundOverlapped.Offset = 0;
+				d->OutboundOverlapped.OffsetHigh = 0;
 
-                // We do allow more than one complete write request in the IO
-                // completion port queue. The reason is that if WriteFile
-                // returns true, we -can- re-used the output_buffer -and-
-                // redundant queue entries just cause us to try to write more
-                // often. There is no possibility of corruption.
-                //
-                // It then becomes a trade off between the costs. I find that
-                // keeping the TCP/IP full of data is more important.
-                //
-                DWORD nWritten;
-                b = WriteFile((HANDLE) d->descriptor, d->output_buffer,
-                    nBytes, &nWritten, &d->OutboundOverlapped);
+				// We do allow more than one complete write request in the IO
+				// completion port queue. The reason is that if WriteFile
+				// returns true, we -can- re-used the output_buffer -and-
+				// redundant queue entries just cause us to try to write more
+				// often. There is no possibility of corruption.
+				//
+				// It then becomes a trade off between the costs. I find that
+				// keeping the TCP/IP full of data is more important.
+				//
+				DWORD nWritten;
+				b = WriteFile((HANDLE) d->descriptor, d->output_buffer,
+						nBytes, &nWritten, &d->OutboundOverlapped);
 
-            } while (b);
+			}while (b);
 
-            if (bNothingToWrite)
-            {
-                if (d->bConnectionShutdown)
-                {
-                    scheduler.CancelTask(Task_DeferredClose, d, 0);
-                    scheduler.DeferImmediateTask(PRIORITY_SYSTEM, Task_DeferredClose, d, 0);
-                }
-                continue;
-            }
+			if (bNothingToWrite)
+			{
+				if (d->bConnectionShutdown)
+				{
+					scheduler.CancelTask(Task_DeferredClose, d, 0);
+					scheduler.DeferImmediateTask(PRIORITY_SYSTEM, Task_DeferredClose, d, 0);
+				}
+				continue;
+			}
 
-            d->bWritePending = true;
-            DWORD dwLastError = GetLastError();
-            if (dwLastError != ERROR_IO_PENDING)
-            {
-                // Post a notification that the descriptor should be shutdown
-                //
-                d->bWritePending = false;
-                d->bConnectionDropped = true;
-                Log.tinyprintf("ProcessWindowsTCP(%d) cannot queue write request with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
-                if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
-                {
-                    Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (write)" ENDLINE, GetLastError());
-                }
-            }
-        }
-        else if (lpo == &d->InboundOverlapped && !d->bConnectionDropped)
-        {
-            //Log.tinyprintf("Read(%d bytes)." ENDLINE, nbytes);
-            // The read operation completed
-            //
-            if (nbytes == 0)
-            {
-                // A zero-length IO completion means that the connection was dropped by the client.
-                //
+			d->bWritePending = true;
+			DWORD dwLastError = GetLastError();
+			if (dwLastError != ERROR_IO_PENDING)
+			{
+				// Post a notification that the descriptor should be shutdown
+				//
+				d->bWritePending = false;
+				d->bConnectionDropped = true;
+				Log.tinyprintf("ProcessWindowsTCP(%d) cannot queue write request with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
+				if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
+				{
+					Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (write)" ENDLINE, GetLastError());
+				}
+			}
+		}
+		else if (lpo == &d->InboundOverlapped && !d->bConnectionDropped)
+		{
+			//Log.tinyprintf("Read(%d bytes)." ENDLINE, nbytes);
+			// The read operation completed
+			//
+			if (nbytes == 0)
+			{
+				// A zero-length IO completion means that the connection was dropped by the client.
+				//
 
-                // Post a notification that the descriptor should be shutdown
-                //
-                d->bConnectionDropped = true;
-                Log.tinyprintf("ProcessWindowsTCP(%d) zero-length read. Requesting port shutdown." ENDLINE, d->descriptor);
-                if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
-                {
-                    Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (read)" ENDLINE, GetLastError());
-                }
-                continue;
-            }
+				// Post a notification that the descriptor should be shutdown
+				//
+				d->bConnectionDropped = true;
+				Log.tinyprintf("ProcessWindowsTCP(%d) zero-length read. Requesting port shutdown." ENDLINE, d->descriptor);
+				if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
+				{
+					Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (read)" ENDLINE, GetLastError());
+				}
+				continue;
+			}
 
-            d->last_time.GetUTC();
+			d->last_time.GetUTC();
 
-            // Undo autodark
-            //
-            if (d->flags & DS_AUTODARK)
-            {
-                // Clear the DS_AUTODARK on every related session.
-                //
-                DESC *d1;
-                DESC_ITER_PLAYER(d->player, d1)
-                {
-                    d1->flags &= ~DS_AUTODARK;
-                }
-                db[d->player].fs.word[FLAG_WORD1] &= ~DARK;
-            }
+			// Undo autodark
+			//
+			if (d->flags & DS_AUTODARK)
+			{
+				// Clear the DS_AUTODARK on every related session.
+				//
+				DESC *d1;
+				DESC_ITER_PLAYER(d->player, d1)
+				{
+					d1->flags &= ~DS_AUTODARK;
+				}
+				db[d->player].fs.word[FLAG_WORD1] &= ~DARK;
+			}
 
-            // process the player's input
-            //
-            process_input_helper(d, d->input_buffer, nbytes);
+			// process the player's input
+			//
+			process_input_helper(d, d->input_buffer, nbytes);
 
-            // now fire off another read
-            //
-            b = ReadFile((HANDLE) d->descriptor, d->input_buffer, sizeof(d->input_buffer), &nbytes, &d->InboundOverlapped);
+			// now fire off another read
+			//
+			b = ReadFile((HANDLE) d->descriptor, d->input_buffer, sizeof(d->input_buffer), &nbytes, &d->InboundOverlapped);
 
-            // if ReadFile returns true, then the read completed successfully already, but it was also added to the IO
-            // completion port queue, so in order to avoid having two requests in the queue for the same buffer
-            // (corruption problems), we act as if the IO is still pending.
-            //
+			// if ReadFile returns true, then the read completed successfully already, but it was also added to the IO
+			// completion port queue, so in order to avoid having two requests in the queue for the same buffer
+			// (corruption problems), we act as if the IO is still pending.
+			//
 
-            if (!b)
-            {
-                // ERROR_IO_PENDING is a normal way of saying, 'not done yet'. All other errors are serious errors.
-                //
-                DWORD dwLastError = GetLastError();
-                if (dwLastError != ERROR_IO_PENDING)
-                {
-                    // Post a notification that the descriptor should be shutdown, and do no more IO.
-                    //
-                    d->bConnectionDropped = true;
-                    Log.tinyprintf("ProcessWindowsTCP(%d) cannot queue read request with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
-                    if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
-                    {
-                        Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (read)" ENDLINE, GetLastError());
-                    }
-                }
-            }
-        }
-        else if (lpo == &lpo_welcome)
-        {
-            char *buff = alloc_mbuf("ProcessWindowsTCP.Premature");
-            mux_strncpy(buff, inet_ntoa(d->address.sin_addr), MBUF_SIZE-1);
+			if (!b)
+			{
+				// ERROR_IO_PENDING is a normal way of saying, 'not done yet'. All other errors are serious errors.
+				//
+				DWORD dwLastError = GetLastError();
+				if (dwLastError != ERROR_IO_PENDING)
+				{
+					// Post a notification that the descriptor should be shutdown, and do no more IO.
+					//
+					d->bConnectionDropped = true;
+					Log.tinyprintf("ProcessWindowsTCP(%d) cannot queue read request with error %ld. Requesting port shutdown." ENDLINE, d->descriptor, dwLastError);
+					if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_shutdown))
+					{
+						Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (read)" ENDLINE, GetLastError());
+					}
+				}
+			}
+		}
+		else if (lpo == &lpo_welcome)
+		{
+			char *buff = alloc_mbuf("ProcessWindowsTCP.Premature");
+			mux_strncpy(buff, inet_ntoa(d->address.sin_addr), MBUF_SIZE-1);
 
-            // If the socket is invalid, the we were unable to queue a read
-            // request, and the port was shutdown while this packet was in
-            // the completion port queue.
-            //
-            bool bInvalidSocket = IS_INVALID_SOCKET(d->descriptor);
+			// If the socket is invalid, the we were unable to queue a read
+			// request, and the port was shutdown while this packet was in
+			// the completion port queue.
+			//
+			bool bInvalidSocket = IS_INVALID_SOCKET(d->descriptor);
 
-            // Log connection.
-            //
-            STARTLOG(LOG_NET | LOG_LOGIN, "NET", "CONN");
-            const char *lDesc = mux_i64toa_t(d->descriptor);
-            Log.tinyprintf("[%s/%s] Connection opened (remote port %d)",
-                bInvalidSocket ? "UNKNOWN" : lDesc, buff,
-                ntohs(d->address.sin_port));
-            ENDLOG;
+			// Log connection.
+			//
+			STARTLOG(LOG_NET | LOG_LOGIN, "NET", "CONN");
+			const char *lDesc = mux_i64toa_t(d->descriptor);
+			Log.tinyprintf("[%s/%s] Connection opened (remote port %d)",
+					bInvalidSocket ? "UNKNOWN" : lDesc, buff,
+					ntohs(d->address.sin_port));
+			ENDLOG;
 
-            SiteMonSend(d->descriptor, buff, d, "Connection");
+			SiteMonSend(d->descriptor, buff, d, "Connection");
 
-            if (bInvalidSocket)
-            {
-                // Log premature disconnection.
-                //
-                STARTLOG(LOG_NET | LOG_LOGIN, "NET", "DISC");
-                Log.tinyprintf("[UNKNOWN/%s] Connection closed prematurely (remote port %d)",
-                    buff, ntohs(d->address.sin_port));
-                ENDLOG;
+			if (bInvalidSocket)
+			{
+				// Log premature disconnection.
+				//
+				STARTLOG(LOG_NET | LOG_LOGIN, "NET", "DISC");
+				Log.tinyprintf("[UNKNOWN/%s] Connection closed prematurely (remote port %d)",
+						buff, ntohs(d->address.sin_port));
+				ENDLOG;
 
-                SiteMonSend(d->descriptor, buff, d, "Connection closed prematurely");
-            }
-            else
-            {
-                // Welcome the user.
-                //
-                welcome_user(d);
-            }
-            free_mbuf(buff);
-        }
-        else if (lpo == &lpo_shutdown)
-        {
-            //Log.WriteString("Shutdown." ENDLINE);
-            // Shut this descriptor down.
-            //
-            shutdownsock(d, R_SOCKDIED);   // shut him down
-        }
-        else if (lpo == &lpo_aborted)
-        {
-            // Instead of freeing the descriptor immediately, we are going to put it back at the
-            // end of the queue. CancelIo will still generate aborted packets. We don't want the descriptor
-            // be be re-used and have a new connection be stepped on by a dead one.
-            //
-            if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_aborted_final))
-            {
-                Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (aborted)" ENDLINE, GetLastError());
-            }
-        }
-        else if (lpo == &lpo_aborted_final)
-        {
-            // Now that we are fairly certain that all IO packets refering to this descriptor have been processed
-            // and no further packets remain in the IO queue, schedule a task to free the descriptor. This allows
-            // any tasks which might potentially refer to this descriptor to be handled before we free the
-            // descriptor.
-            //
-            scheduler.DeferImmediateTask(PRIORITY_SYSTEM, Task_FreeDescriptor, d, 0);
-        }
-        else if (lpo == &lpo_wakeup)
-        {
-            // Just waking up is good enough.
-            //
-        }
-    }
+				SiteMonSend(d->descriptor, buff, d, "Connection closed prematurely");
+			}
+			else
+			{
+				// Welcome the user.
+				//
+				welcome_user(d);
+			}
+			free_mbuf(buff);
+		}
+		else if (lpo == &lpo_shutdown)
+		{
+			//Log.WriteString("Shutdown." ENDLINE);
+			// Shut this descriptor down.
+			//
+			shutdownsock(d, R_SOCKDIED);// shut him down
+		}
+		else if (lpo == &lpo_aborted)
+		{
+			// Instead of freeing the descriptor immediately, we are going to put it back at the
+			// end of the queue. CancelIo will still generate aborted packets. We don't want the descriptor
+			// be be re-used and have a new connection be stepped on by a dead one.
+			//
+			if (!PostQueuedCompletionStatus(CompletionPort, 0, (MUX_ULONG_PTR) d, &lpo_aborted_final))
+			{
+				Log.tinyprintf("Error %ld on PostQueuedCompletionStatus in ProcessWindowsTCP (aborted)" ENDLINE, GetLastError());
+			}
+		}
+		else if (lpo == &lpo_aborted_final)
+		{
+			// Now that we are fairly certain that all IO packets refering to this descriptor have been processed
+			// and no further packets remain in the IO queue, schedule a task to free the descriptor. This allows
+			// any tasks which might potentially refer to this descriptor to be handled before we free the
+			// descriptor.
+			//
+			scheduler.DeferImmediateTask(PRIORITY_SYSTEM, Task_FreeDescriptor, d, 0);
+		}
+		else if (lpo == &lpo_wakeup)
+		{
+			// Just waking up is good enough.
+			//
+		}
+	}
 }
 
 #endif // WIN32
+void SiteMonSend(SOCKET port, const char *address, DESC *d, const char *msg) {
+	// Don't do sitemon for blocked sites.
+	//
+	if (d != NULL && (d->host_info & H_NOSITEMON)) {
+		return;
+	}
 
-void SiteMonSend(SOCKET port, const char *address, DESC *d, const char *msg)
-{
-    // Don't do sitemon for blocked sites.
-    //
-    if (  d != NULL
-       && (d->host_info & H_NOSITEMON))
-    {
-        return;
-    }
+	// Build the msg.
+	//
+	char *sendMsg;
+	bool bSuspect = (d != NULL) && (d->host_info & H_SUSPECT);
+	if (IS_INVALID_SOCKET(port)) {
+		sendMsg = tprintf("SITEMON: [UNKNOWN] %s from %s.%s", msg, address,
+				bSuspect ? " (SUSPECT)" : "");
+	} else {
+		sendMsg = tprintf("SITEMON: [%d] %s from %s.%s", port, msg, address,
+				bSuspect ? " (SUSPECT)" : "");
+	}
 
-    // Build the msg.
-    //
-    char *sendMsg;
-    bool bSuspect = (d != NULL) && (d->host_info & H_SUSPECT);
-    if (IS_INVALID_SOCKET(port))
-    {
-        sendMsg = tprintf("SITEMON: [UNKNOWN] %s from %s.%s", msg, address,
-            bSuspect ? " (SUSPECT)": "");
-    }
-    else
-    {
-        sendMsg = tprintf("SITEMON: [%d] %s from %s.%s", port, msg,
-            address, bSuspect ? " (SUSPECT)": "");
-    }
-
-    DESC *nd;
-    DESC_ITER_CONN(nd)
-    {
-        if (SiteMon(nd->player))
-        {
-            queue_string(nd, sendMsg);
-            queue_write_LEN(nd, "\r\n", 2);
-            process_output(nd, false);
-        }
-    }
+	DESC *nd;
+	DESC_ITER_CONN(nd)
+	{
+		if (SiteMon(nd->player)) {
+			queue_string(nd, sendMsg);
+			queue_write_LEN(nd, "\r\n", 2);
+			process_output(nd, false);
+		}
+	}
 }
