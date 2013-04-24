@@ -1632,6 +1632,9 @@ int CHashFile::Open(const char *szDirFile, const char *szPageFile, int nCachePag
         FILE_ATTRIBUTE_NORMAL + FILE_FLAG_RANDOM_ACCESS, NULL);
     bSuccess = (INVALID_HANDLE_VALUE != m_hPageFile);
 #else // WIN32
+    Log.WriteString("Page file: ");
+    Log.WriteString(szPageFile);
+    Log.WriteString(""ENDLINE);
     bSuccess = mux_open(&m_hPageFile, szPageFile, O_RDWR|O_BINARY);
 #endif // WIN32
     if (!bSuccess)

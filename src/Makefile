@@ -6,11 +6,11 @@
 SHELL=/bin/sh
 srcdir = .
 
-BIN = game/bin
+BIN = ../game/bin
 CC = gcc
 CXX = g++
 #CXXCPP = g++ -E	# This is broken in autoconf.  Sigh.
-CXXCPP = $(CXX) -E -fpermissive
+CXXCPP = $(CXX) -E
 LIBS = -lm -lnsl -lresolv -lcrypt  
 
 .SUFFIXES: .cpp
@@ -21,7 +21,7 @@ LIBS = -lm -lnsl -lresolv -lcrypt
 #
 #OPTIM = -O
 #OPTIM = -g -pg -O
-OPTIM = -g -O -fpermissive
+OPTIM = -g -O
 
 # By default, REALITY_LVLS is not enabled.  If you wish to use REALITY_LVLS,
 # run configure with --enable-realitylvls.  Please read the docs/REALITY.
@@ -48,14 +48,6 @@ WOD_REALMS =
 # NOTE: To ensure a clean build, please 'make clean' first.
 #
 MEMORY_BASED = 
-
-# Query Slave. By default, this is off. This can be turned on by running
-# configure with --enable-sqlquery. The Query Slave is how to support
-# queries to foriegn data sources such as SQL servers.
-#
-QUERY_SLAVE = 
-QUERYLIBS   = -ldbi
-SQLSLAVE    = 
 
 # Firan MUX. By default, this is off. This can be turned on by running
 # configure with --enable-firanmux. Firan MUX modifications are necessary
@@ -85,18 +77,18 @@ D_SRC	= _build.cpp alloc.cpp attrcache.cpp boolexp.cpp bsd.cpp command.cpp \
 	help.cpp htab.cpp local.cpp log.cpp look.cpp mail.cpp match.cpp \
 	mguests.cpp move.cpp muxcli.cpp netcommon.cpp object.cpp \
 	predicates.cpp player.cpp player_c.cpp plusemail.cpp powers.cpp \
-	quota.cpp rob.cpp pcre.cpp set.cpp sha1.cpp speech.cpp sqlshared.cpp \
+	quota.cpp rob.cpp pcre.cpp set.cpp sha1.cpp speech.cpp \
 	stringutil.cpp strtod.cpp svdrand.cpp svdhash.cpp svdreport.cpp \
 	timer.cpp timeutil.cpp unparse.cpp vattr.cpp walkdb.cpp wild.cpp \
-	wiz.cpp
+	wiz.cpp SocketReader.cpp HandshakeHeader.cpp printutils.cpp
 D_OBJ	= _build.o alloc.o attrcache.o boolexp.o bsd.o command.o comsys.o \
 	conf.o cque.o create.o db.o db_rw.o eval.o file_c.o flags.o \
 	funceval.o functions.o funmath.o game.o help.o htab.o local.o log.o \
 	look.o mail.o match.o mguests.o move.o muxcli.o netcommon.o object.o \
 	predicates.o player.o player_c.o plusemail.o powers.o quota.o rob.o \
-	pcre.o set.o sha1.o speech.o sqlshared.o stringutil.o strtod.o \
+	pcre.o set.o sha1.o speech.o stringutil.o strtod.o \
 	svdrand.o svdhash.o svdreport.o timer.o timeutil.o unparse.o vattr.o \
-	walkdb.o wild.o wiz.o
+	walkdb.o wild.o wiz.o SocketReader.o HandshakeHeader.o printutils.o
 
 # Version number routine
 VER_SRC	= version.cpp
@@ -163,13 +155,9 @@ OBJ	= $(D_OBJ) $(REALITY_OBJ)
 all: netmux slave $(SQLSLAVE) links
 
 links: netmux slave $(SQLSLAVE)
-	cd game/bin ; rm -f dbconvert ; ln -s ../../netmux dbconvert
-	cd game/bin ; rm -f netmux ; ln -s ../../netmux netmux
-	cd game/bin ; rm -f slave ; ln -s ../../slave slave
-	( if [ -f sqlslave ]; then cd game/bin ; rm -f sqlslave; ln -s ../../sqlslave sqlslave ; fi )
-
-sqlslave: sqlslave.o sqlshared.o
-	$(CXX) $(ALLCXXFLAGS) $(LIBS) $(QUERYLIBS) -o sqlslave sqlslave.o sqlshared.o
+	cd ../game/bin ; rm -f dbconvert ; ln -s ../../src/netmux dbconvert
+	cd ../game/bin ; rm -f netmux ; ln -s ../../src/netmux netmux
+	cd ../game/bin ; rm -f slave ; ln -s ../../src/slave slave
 
 slave: slave.o
 	$(CXX) $(ALLCXXFLAGS) $(LIBS) -o slave slave.o
@@ -183,11 +171,13 @@ netmux: $(OBJ) $(VER_SRC)
 	$(CXX) $(ALLCXXFLAGS) -o netmux $(OBJ) $(VER_OBJ) $(LIBS) $(MORELIBS)
 
 depend: $(ALLSRC) unsplit
-	for i in $(D_SRC) $(AUX_SRC) slave.cpp sqlslave.cpp sqlshared.cpp ; do $(CXXCPP) $(ALLCXXFLAGS) -M $$i; done | sed -e 's:/usr[^ ]*[ ]*::g' | ./unsplit > .depend~
+	for i in $(D_SRC) $(AUX_SRC) slave.cpp ; do $(CXXCPP) $(ALLCXXFLAGS) -M $$i; done | sed -e 's:/usr[^ ]*[ ]*::g' | ./unsplit > .depend~
 	mv .depend~ .depend
 
 realclean:
 	-rm -f *.o a.out core gmon.out mux.*log mux.*sum netmux netmux~
 
 clean:
-	-rm -f *.o a.out core gmon.out mux.*log mux.*sum slave sqlslave netmux
+	-rm -f *.o a.out core gmon.out mux.*log mux.*sum slave netmux
+
+#include .depend

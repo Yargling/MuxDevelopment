@@ -6,10 +6,26 @@
 #ifndef EXTERNS_H
 #define EXTERNS_H
 
+#include "config.h"
+#include "autoconf.h"
 #include "db.h"
 #include "match.h"
 #include "mudconf.h"
 #include "svdrand.h"
+
+enum ConnectionType {
+	NORMAL, WEB_SOCKET
+};
+struct PortInfo
+{
+    int    port;
+    SOCKET socket;
+    ConnectionType type;
+
+    PortInfo() : port(-1), socket(), type(NORMAL) {
+    }
+};
+
 #include "interface.h"
 
 // From bsd.cpp.
@@ -908,16 +924,6 @@ void list_system_resources(dbref player);
 #define REALM_DISABLE_ADESC           0x00000008L
 int DoThingToThingVisibility(dbref looker, dbref lookee, int action_state);
 #endif // WOD_REALMS
-
-struct PortInfo
-{
-    int    port;
-    SOCKET socket;
-    ConnectionType type;
-
-    PortInfo() : port(-1), socket(), type(NORMAL) {
-    }
-};
 
 #define MAX_LISTEN_PORTS 10
 extern PortInfo aMainGamePorts[MAX_LISTEN_PORTS];

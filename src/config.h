@@ -237,9 +237,9 @@ typedef unsigned char UINT8;
 typedef UINT8  UTF8;
 typedef UINT8 *PUTF8;
 
-#ifndef HAVE_IN_ADDR_T
+/*#ifndef HAVE_IN_ADDR_T
 typedef UINT32 in_addr_t;
-#endif
+#endif*/
 
 #ifndef SMALLEST_INT_GTE_NEG_QUOTIENT
 #define LARGEST_INT_LTE_NEG_QUOTIENT

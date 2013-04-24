@@ -19,6 +19,7 @@
 #endif // HAVE_SYS_SELECT_H
 #endif // !WIN32
 /* these symbols must be defined by the interface */
+#include "externs.h"
 
 /* Disconnection reason codes */
 
@@ -121,9 +122,6 @@ struct prog_data {
 #define OPTION_WANTYES_OPPOSITE 5
 
 typedef struct descriptor_data DESC;
-enum ConnectionType {
-	NORMAL, WEB_SOCKET
-};
 struct descriptor_data {
 private:
 	SOCKET descriptor;

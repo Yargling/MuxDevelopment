@@ -24,6 +24,8 @@
 #include "command.h"
 #include "file_c.h"
 #include "slave.h"
+#include "printutils.h"
+#include "errno.h"
 
 #ifdef SOLARIS
 extern const int _sys_nsig;
@@ -563,7 +565,6 @@ void boot_sqlslave(dbref executor, dbref caller, dbref enactor, int)
 		// dup2() functionality.  That is, the destination descriptor is
 		// always available for it, and sv[1] is never that descriptor.
 		// It is likely that the standard defined behavior of dup2()
-		// would handle the job by itself more directly, but a little
 		// extra code is low-cost insurance.
 		//
 		mux_close(sv[0]);
@@ -989,6 +990,7 @@ static void make_socket(PortInfo *Port) {
 
 	int cc = bind(s, (struct sockaddr *) &server, sizeof(server));
 	if (IS_SOCKET_ERROR(cc)) {
+		Log.tinyprintf("Bind failed for %d" ENDLINE, Port->port);
 		log_perror("NET", "FAIL", NULL, "bind");
 		if (SOCKET_CLOSE(s) == 0) {
 			DebugTotalSockets--;
@@ -999,7 +1001,7 @@ static void make_socket(PortInfo *Port) {
 
 	listen(s, SOMAXCONN);
 	Port->socket = s;
-	Log.tinyprintf("Listening on port %d" ENDLINE, Port->port);
+	Log.tinyprintf("Listening on port %d, socket: %d" ENDLINE, Port->port, Port->socket);
 }
 
 #ifndef WIN32
@@ -1571,6 +1573,7 @@ void shovechars(int nPorts, PortInfo aPorts[]) {
 #endif // QUERY_SLAVE
 		// Check for new connection requests.
 		//
+
 		for (i = 0; i < nPorts; i++) {
 			if (CheckInput(aPorts[i].socket)) {
 				int iSocketError;
@@ -1624,13 +1627,40 @@ void shovechars(int nPorts, PortInfo aPorts[]) {
 }
 
 #endif // WIN32
+
+#include "HandshakeHeader.h"
+#include <iostream>
 SOCKET makeConnection(const int SOCKET_IN, const ConnectionType& TYPE,
 		struct sockaddr * pSocketOut) {
 	socklen_t addr_len = sizeof(struct sockaddr);
+
+	Log.WriteString("Making connection: "ENDLINE);
+	Log.WriteInteger(SOCKET_IN);
+	Log.WriteString(", ");
+	Log.WriteInteger(TYPE);
+	Log.WriteString("" ENDLINE);
 	SOCKET baseSocket = accept(SOCKET_IN, pSocketOut, &addr_len);
+
+	if (IS_INVALID_SOCKET(baseSocket)) {
+		Log.tinyprintf("Accept failed: errno: %d"ENDLINE, errno);
+		return baseSocket;
+	}
+	else {
+		Log.tinyprintf("Accept worked: result: %d"ENDLINE, baseSocket);
+	}
 	switch (TYPE) {
 	case NORMAL:
 		return baseSocket;
+	case WEB_SOCKET:
+		websocket::SocketReader reader(baseSocket);
+		websocket::handshaking::HandshakeHeader headerIn(reader);
+
+		Log.WriteString("Websocket info: "ENDLINE);
+		Log.WriteString(headerIn.toString().c_str());
+		Log.WriteString(ENDLINE);
+		Log.Flush();
+		std::cout << headerIn.toString() << std::endl;
+		::close(baseSocket);
 		//TODO: Add websocket handshake stuff here
 	}
 	return INVALID_SOCKET;
@@ -1650,6 +1680,10 @@ DESC *new_connection(PortInfo *Port, int *piSocketError) {
 	const char *cmdsave = mudstate.debug_cmd;
 	mudstate.debug_cmd = "< new_connection >";
 	addr_len = sizeof(struct sockaddr);
+
+	Log.WriteString(toString(*Port).c_str());
+	Log.WriteString(ENDLINE);
+
 
 	//SOCKET newsock = accept(Port->socket, (struct sockaddr *)&addr, &addr_len);
 	SOCKET newsock = makeConnection(Port->socket, Port->type,
