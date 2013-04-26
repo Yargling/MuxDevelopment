@@ -20,7 +20,9 @@ private:
 	const SOCKET _MySocket;
 	uint8_t * const _BufferedData;
 	uint_fast32_t _BufferIndex;
+	uint_fast32_t _BufferReadIndex;
 
+	bool isBufferEmpty();
 	int bufferData();
 	uint32_t getAvailableData(uint8_t * dataOut, const uint32_t MaxOut) throw (int);
 	char getNextChar() throw (int);

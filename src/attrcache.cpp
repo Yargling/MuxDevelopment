@@ -58,6 +58,7 @@ int cache_init(const char *game_dir_file, const char *game_pag_file,
         return HF_OPEN_STATUS_ERROR;
     }
 
+    Log.tinyprintf("About to init cache: %s; %s; %d"ENDLINE, game_dir_file, game_pag_file, nCachePages);
     int cc = hfAttributeFile.Open(game_dir_file, game_pag_file, nCachePages);
     if (cc != HF_OPEN_STATUS_ERROR)
     {

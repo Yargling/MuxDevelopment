@@ -290,6 +290,8 @@ public:
 
 
 #define SIZEOF_LOG_BUFFER 1024
+#include "timeutil.h"
+
 class CLogFile
 {
 private:

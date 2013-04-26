@@ -1164,8 +1164,10 @@ bool CHashPage::ReadPage(HANDLE hFile, HF_FILEOFFSET oWhere)
     for ( ; cnt; MuxAlarm.Sleep(time_1s), cnt--)
     {
 #ifdef HAVE_PREAD
+    	Log.tinyprintf("Using pread: %d, %ld"ENDLINE, m_nPageSize, oWhere);
         int cc = pread(hFile, m_pPage, m_nPageSize, oWhere);
 #else
+        Log.WriteString("Using seek"ENDLINE);
         if (mux_lseek(hFile, oWhere, SEEK_SET) == (off_t)-1)
         {
             Log.tinyprintf("CHashPage::Read - lseek error %u." ENDLINE, errno);
@@ -1380,10 +1382,12 @@ bool CHashFile::InitializeDirectory(unsigned int n)
     }
 
     m_nDir = n;
+    Log.tinyprintf("CHashFile::InitializeDirectory: n: %u; Updating DirDepth: was %u, now %u"ENDLINE, n, m_nDirDepth, 0);
     m_nDirDepth = 0;
     n >>= 1;
     while (n)
     {
+    	Log.tinyprintf("CHashFile::InitializeDirectory2: Updating DirDepth: was %u, now %u"ENDLINE, m_nDirDepth, m_nDirDepth+1);
         m_nDirDepth++;
         n >>= 1;
     }
@@ -1391,6 +1395,7 @@ bool CHashFile::InitializeDirectory(unsigned int n)
     m_pDir = NULL;
     try
     {
+    	Log.tinyprintf("CHashFile::InitializeDirectory: setting up m_pDir: %d"ENDLINE,m_nDir);
         m_pDir = new HF_FILEOFFSET[m_nDir];
     }
     catch (...)
@@ -1424,9 +1429,10 @@ bool CHashFile::InitializeDirectory(unsigned int n)
 
     for (unsigned int i = 0; i < m_nDir; i++)
     {
-        m_pDir[i] = 0xFFFFFFFFUL;
+        m_pDir[i] = HF_FILEOFFSET(-1L);
         m_hpCacheLookup[i] = -1;
     }
+    Log.tinyprintf("CHashFile::InitializeDirectory: setting up m_pDir[all values to]: %lu"ENDLINE,m_pDir[0]);
 
     return true;
 }
@@ -1479,6 +1485,7 @@ bool CHashFile::CreateFileSet(const char *szDirFile, const char *szPageFile)
     m_Cache[iCache].m_hp.Empty(0, 0UL, 100);
     m_Cache[iCache].m_o = 0UL;
 
+    Log.tinyprintf("CHashFile::CreateFileSet: m_pDir[0 and 1]: %ld"ENDLINE,  m_Cache[iCache].m_o);
     m_pDir[0] = m_pDir[1] = m_Cache[iCache].m_o;
     m_hpCacheLookup[0] = m_hpCacheLookup[1] = iCache;
 
@@ -1513,6 +1520,7 @@ bool CHashFile::RebuildDirectory(void)
             return false;
         }
 
+        Log.tinyprintf("RebuildDirectory: About to call ReadPage with %ld"ENDLINE, oPage);
         if (m_Cache[iCache].m_hp.ReadPage(m_hPageFile, oPage))
         {
             m_Cache[iCache].m_o = oPage;
@@ -1536,11 +1544,12 @@ bool CHashFile::RebuildDirectory(void)
         m_Cache[iCache].m_hp.GetRange(m_nDirDepth, nStart, nEnd);
         for ( ; nStart <= nEnd; nStart++)
         {
-            if (m_pDir[nStart] != 0xFFFFFFFFUL)
+            if (m_pDir[nStart] != HF_FILEOFFSET(-1L))
             {
                 Log.WriteString("CHashFile::Open - The keyspace of pages in Page File overlap." ENDLINE);
                 return false;
             }
+            Log.tinyprintf("RebuildDirectory: Adding to m_pDir: index: %u; value: %l"ENDLINE, nStart, oPage);
             m_pDir[nStart] = oPage;
             m_hpCacheLookup[nStart] = iCache;
         }
@@ -1550,7 +1559,7 @@ bool CHashFile::RebuildDirectory(void)
     //
     for (UINT32 iFileDir = 0; iFileDir < m_nDir; iFileDir++)
     {
-        if (m_pDir[iFileDir] == 0xFFFFFFFFUL)
+        if (m_pDir[iFileDir] == HF_FILEOFFSET(-1L))
         {
             Log.WriteString("CHashFile::Open - Page File is incomplete." ENDLINE);
             return false;
@@ -1567,12 +1576,14 @@ bool CHashFile::ReadDirectory(void)
 #else // WIN32
     UINT32 cc = mux_lseek(m_hDirFile, 0, SEEK_END);
 #endif // WIN32
-    if (cc == 0xFFFFFFFFUL)
+    if (cc == HF_FILEOFFSET(-1L))
     {
         return false;
     }
 
-    InitializeDirectory(cc / HF_SIZEOF_FILEOFFSET);
+    Log.tinyprintf("CHashFile::ReadDirectory: About to call InitializeDirectory: %u, %u"ENDLINE, cc, HF_SIZEOF_FILEOFFSET);
+    InitializeDirectory(cc / HF_SIZEOF_FILEOFFSET); // HF_SIZEOF_FILEOFFSET
+    //TODO: Work out why this causes a problem on my machine - 64 bit vs 32 bit?
 
 #ifdef WIN32
     cc = SetFilePointer(m_hDirFile, 0, 0, FILE_BEGIN);
@@ -1659,7 +1670,7 @@ int CHashFile::Open(const char *szDirFile, const char *szPageFile, int nCachePag
 #else // WIN32
     oEndOfFile = mux_lseek(m_hPageFile, 0, SEEK_END);
 #endif // WIN32
-    if (oEndOfFile == 0xFFFFFFFFUL)
+    if (oEndOfFile == HF_FILEOFFSET(-1L))
     {
         CloseAll();
         return HF_OPEN_STATUS_ERROR;
@@ -1852,6 +1863,7 @@ bool CHashFile::Insert(HP_HEAPLENGTH nRecord, UINT32 nHash, void *pRecord)
             Log.WriteString("CHashFile::Insert - iFileDir out of range." ENDLINE);
             return false;
         }
+        Log.tinyprintf("Insert: About to invoke ReadCache: %d"ENDLINE, iFileDir);
         iCache = ReadCache(iFileDir, &cs_whits);
         if (iCache < 0)
         {
@@ -1973,6 +1985,7 @@ bool CHashFile::Insert(HP_HEAPLENGTH nRecord, UINT32 nHash, void *pRecord)
         m_Cache[iEmpty1].m_hp.GetRange(m_nDirDepth, nStart, nEnd);
         for ( ; nStart <= nEnd; nStart++)
         {
+        	Log.tinyprintf("Insert: Adding to m_pDir: index: %u; value: %l"ENDLINE, nStart, oNew);
             m_pDir[nStart] = oNew;
             m_hpCacheLookup[nStart] = iEmpty1;
         }
@@ -2065,6 +2078,8 @@ bool CHashFile::DoubleDirectory(void)
     unsigned int iNewDir = 0;
     for (unsigned int iDir = 0; iDir < m_nDir; iDir++)
     {
+    	Log.tinyprintf("CHashFile::DoubleDirectory: Updating m_pDir: (%u): was: %l: now: %l"ENDLINE, iNewDir, m_pDir[iNewDir], m_pDir[iDir]);
+    	Log.tinyprintf("CHashFile::DoubleDirectory: Updating m_pDir: (%u): was: %l: now: %l"ENDLINE, iNewDir+1, m_pDir[iNewDir+1+1], m_pDir[iDir]);
         pNewDir[iNewDir]   = m_pDir[iDir];
         pNewDir[iNewDir+1] = m_pDir[iDir];
         pNewCacheLookup[iNewDir]   = m_hpCacheLookup[iDir];
@@ -2083,6 +2098,7 @@ bool CHashFile::DoubleDirectory(void)
     delete [] m_hpCacheLookup;
     m_hpCacheLookup = pNewCacheLookup;
 
+    Log.tinyprintf("CHashFile::DoubleDirectory: Updating DirDepth: was %u, now %u"ENDLINE, m_nDirDepth, nNewDirDepth);
     m_nDirDepth = nNewDirDepth;
     m_nDir = nNewDir;
     return true;
@@ -2099,6 +2115,7 @@ UINT32 CHashFile::FindFirstKey(UINT32 nHash)
         cs_fails++;
         return HF_FIND_END;
     }
+    Log.tinyprintf("FindFirstKey: About to invoke ReadCache: %d"ENDLINE, iFileDir);
     iCache = ReadCache(iFileDir, &cs_rhits);
     if (iCache < 0)
     {
@@ -2283,6 +2300,8 @@ int CHashFile::ReadCache(UINT32 iFileDir, int *phits)
     int iCache = m_hpCacheLookup[iFileDir];
     HF_FILEOFFSET oPage = m_pDir[iFileDir];
 
+    Log.tinyprintf("ReadCache: %lu; %d"ENDLINE, oPage, iFileDir);
+
     if (  iCache != -1
        && m_Cache[iCache].m_iState != HF_CACHE_EMPTY
        && m_Cache[iCache].m_o == oPage)
@@ -2294,6 +2313,7 @@ int CHashFile::ReadCache(UINT32 iFileDir, int *phits)
 
     if ((iCache = AllocateEmptyPage(0, NULL)) >= 0)
     {
+    	Log.tinyprintf("ReadCache: About to call ReadPage with %ld"ENDLINE, oPage);
         if (m_Cache[iCache].m_hp.ReadPage(m_hPageFile, oPage))
         {
             //if (m_Cache[i].m_hp.Validate())

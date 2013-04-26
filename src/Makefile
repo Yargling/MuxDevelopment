@@ -11,6 +11,7 @@ CC = gcc
 CXX = g++
 #CXXCPP = g++ -E	# This is broken in autoconf.  Sigh.
 CXXCPP = $(CXX) -E
+CXXFLAGS = -m32
 LIBS = -lm -lnsl -lresolv -lcrypt  
 
 .SUFFIXES: .cpp
