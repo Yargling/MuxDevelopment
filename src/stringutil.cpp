@@ -4162,4 +4162,3 @@ void mux_string::import(size_t n, const char *str)
 void mux_string::copy(char *buff, char **bufc)
 {
 }
-

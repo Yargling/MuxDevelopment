@@ -19,6 +19,8 @@
 #include <sys/wait.h>
 #endif // !WIN32
 #include <signal.h>
+#include <errno.h>
+#include <sys/socket.h>
 
 #include "attrs.h"
 #include "command.h"
@@ -26,6 +28,7 @@
 #include "slave.h"
 #include "printutils.h"
 #include "errno.h"
+#include "Websockets.h"
 
 #ifdef SOLARIS
 extern const int _sys_nsig;
@@ -1628,39 +1631,36 @@ void shovechars(int nPorts, PortInfo aPorts[]) {
 
 #endif // WIN32
 
-#include "HandshakeHeader.h"
-#include <iostream>
+
 SOCKET makeConnection(const int SOCKET_IN, const ConnectionType& TYPE,
 		struct sockaddr * pSocketOut) {
 	socklen_t addr_len = sizeof(struct sockaddr);
-
-	Log.WriteString("Making connection: "ENDLINE);
-	Log.WriteInteger(SOCKET_IN);
-	Log.WriteString(", ");
-	Log.WriteInteger(TYPE);
-	Log.WriteString("" ENDLINE);
 	SOCKET baseSocket = accept(SOCKET_IN, pSocketOut, &addr_len);
 
 	if (IS_INVALID_SOCKET(baseSocket)) {
 		Log.tinyprintf("Accept failed: errno: %d"ENDLINE, errno);
-		return baseSocket;
+		return INVALID_SOCKET;
 	}
-	else {
-		Log.tinyprintf("Accept worked: result: %d"ENDLINE, baseSocket);
-	}
+
 	switch (TYPE) {
 	case NORMAL:
 		return baseSocket;
 	case WEB_SOCKET:
-		websocket::SocketReader reader(baseSocket);
+		if (conductHandshake(baseSocket)) {
+			return baseSocket;
+		}
+		else {
+			::close(baseSocket);
+		}
+		/*websocket::SocketReader reader(baseSocket);
 		websocket::handshaking::HandshakeHeader headerIn(reader);
 
 		Log.WriteString("Websocket info: "ENDLINE);
 		Log.WriteString(headerIn.toString().c_str());
 		Log.WriteString(ENDLINE);
 		Log.Flush();
-		std::cout << headerIn.toString() << std::endl;
-		::close(baseSocket);
+		std::cout << headerIn.toString() << std::endl;*/
+
 		//TODO: Add websocket handshake stuff here
 	}
 	return INVALID_SOCKET;
@@ -2186,6 +2186,7 @@ DESC *initializesock(SOCKET s, struct sockaddr_in *a) {
 	}
 #endif // WIN32
 	d = alloc_desc("init_sock");
+	d->init();
 
 #ifdef WIN32
 	if (bUseCompletionPorts)

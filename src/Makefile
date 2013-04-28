@@ -22,7 +22,7 @@ LIBS = -lm -lnsl -lresolv -lcrypt
 #
 #OPTIM = -O
 #OPTIM = -g -pg -O
-OPTIM = -g -O
+OPTIM = -g -pg -O0
 
 # By default, REALITY_LVLS is not enabled.  If you wish to use REALITY_LVLS,
 # run configure with --enable-realitylvls.  Please read the docs/REALITY.
@@ -81,7 +81,9 @@ D_SRC	= _build.cpp alloc.cpp attrcache.cpp boolexp.cpp bsd.cpp command.cpp \
 	quota.cpp rob.cpp pcre.cpp set.cpp sha1.cpp speech.cpp \
 	stringutil.cpp strtod.cpp svdrand.cpp svdhash.cpp svdreport.cpp \
 	timer.cpp timeutil.cpp unparse.cpp vattr.cpp walkdb.cpp wild.cpp \
-	wiz.cpp SocketReader.cpp HandshakeHeader.cpp printutils.cpp
+	wiz.cpp SocketReader.cpp HandshakeHeader.cpp printutils.cpp Utils.cpp \
+	Websockets.cpp WebSocketHeader.cpp sha1_web.cpp Base64Encoder.cpp \
+	OutputParser.cpp
 D_OBJ	= _build.o alloc.o attrcache.o boolexp.o bsd.o command.o comsys.o \
 	conf.o cque.o create.o db.o db_rw.o eval.o file_c.o flags.o \
 	funceval.o functions.o funmath.o game.o help.o htab.o local.o log.o \
@@ -89,7 +91,9 @@ D_OBJ	= _build.o alloc.o attrcache.o boolexp.o bsd.o command.o comsys.o \
 	predicates.o player.o player_c.o plusemail.o powers.o quota.o rob.o \
 	pcre.o set.o sha1.o speech.o stringutil.o strtod.o \
 	svdrand.o svdhash.o svdreport.o timer.o timeutil.o unparse.o vattr.o \
-	walkdb.o wild.o wiz.o SocketReader.o HandshakeHeader.o printutils.o
+	walkdb.o wild.o wiz.o SocketReader.o HandshakeHeader.o printutils.o Utils.o \
+	Websockets.o WebSocketHeader.o sha1_web.o Base64Encoder.o \
+	OutputParser.o
 
 # Version number routine
 VER_SRC	= version.cpp

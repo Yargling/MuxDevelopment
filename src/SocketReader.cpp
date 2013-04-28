@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sstream>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "svdhash.h"
 
@@ -63,6 +64,7 @@ int SocketReader::readAvailable(uint8_t * bufferOut,
 int SocketReader::bufferData() {
 	if (isBufferEmpty()) {
 		const int ReadAmount = ::read(_MySocket, _BufferedData, BufferSize);
+		const int ReadError = errno;
 
 		if (ReadAmount > 0U) {
 			_BufferIndex = ReadAmount;
@@ -100,6 +102,10 @@ char SocketReader::getNextChar() throw (int) {
 	uint8_t charByte;
 	(void) getAvailableData(&charByte, 1);
 	return char(charByte);
+}
+
+uint8_t SocketReader::read() throw (int) {
+	return uint8_t(getNextChar());
 }
 
 } /* namespace websocket */

@@ -5,6 +5,8 @@
 #ifndef STRINGUTIL_H
 #define STRINGUTIL_H
 
+#include <string>
+
 extern const bool mux_isprint[256];
 extern const bool mux_isdigit[256];
 extern const bool mux_isxdigit[256];

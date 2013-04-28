@@ -7,6 +7,7 @@
 
 #include "HandshakeHeader.h"
 #include <sstream>
+#include "Utils.h"
 
 namespace websocket {
 namespace handshaking {
@@ -29,23 +30,39 @@ HandshakeHeader::HandshakeHeader(SocketReader& dataSource) throw (int) :
 				throw 100;
 			}
 			else {
-				const std::string headerType(currentLine, 0, dividerPos-1);
+				const std::string headerType(currentLine, 0, dividerPos);
 				const std::string headerValue(currentLine, dividerPos+1);
-				_HeaderValuePairs[headerType] = headerValue;
+				_HeaderValuePairs[headerType] = trim(headerValue);
 			}
 		}
 	}
 }
 
-std::string HandshakeHeader::toString() {
+const std::string * HandshakeHeader::getValue(const std::string& Key) const {
+	std::map<std::string, std::string>::const_iterator foundValue = _HeaderValuePairs.find(Key);
+	if (foundValue != _HeaderValuePairs.end()) {
+		return &foundValue->second;
+	}
+	else {
+		return NULL;
+	}
+}
+
+HandshakeHeader& HandshakeHeader::setValue(const std::string& Key, const std::string& Value) {
+	_HeaderValuePairs[Key] = trim(std::string(Value));
+	return *this;
+}
+
+std::string HandshakeHeader::toString() const {
 	std::stringstream stringOutStream;
 	stringOutStream << _FirstLine << "\r\n";
 
-	std::map<std::string, std::string>::iterator itr = _HeaderValuePairs.begin();
-	const std::map<std::string, std::string>::iterator itrEnd = _HeaderValuePairs.end();
+	std::map<std::string, std::string>::const_iterator itr = _HeaderValuePairs.begin();
+	const std::map<std::string, std::string>::const_iterator itrEnd = _HeaderValuePairs.end();
 
 	while (itr != itrEnd) {
 		stringOutStream << itr->first << ": " << itr->second << "\r\n";
+		itr++;
 	}
 
 	stringOutStream << "\r\n";

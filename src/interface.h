@@ -20,6 +20,11 @@
 #endif // !WIN32
 /* these symbols must be defined by the interface */
 #include "externs.h"
+#include "Websockets.h"
+#include "WebSocketHeader.h"
+#include "OutputParser.h"
+#include <memory>
+#include <assert.h>
 
 /* Disconnection reason codes */
 
@@ -126,10 +131,41 @@ struct descriptor_data {
 private:
 	SOCKET descriptor;
 	ConnectionType _TypeOfSocket;
+
+	websocket::SocketReader * _Reader;
+	websocket::SocketWriter * _Writer;
+	websocket::OutputParser * _Parser;
+	websocket::WebSocketReader * _WSReader;
 public:
+
+	void init() {
+		descriptor = -1;
+		_Reader = NULL;
+		_Writer = NULL;
+		_Parser = NULL;
+		_WSReader = NULL;
+	}
+
+	void cleanup() {
+		if (_Reader != NULL) {
+			delete _Reader;
+			delete _Parser;
+			delete _Writer;
+			delete _WSReader;
+		}
+	}
+
 	void setSocket(SOCKET socket, ConnectionType typeOfSocket) {
 		descriptor = socket;
 		_TypeOfSocket = typeOfSocket;
+
+		if (_TypeOfSocket == WEB_SOCKET) {
+			cleanup();
+			_Reader = new websocket::SocketReader(descriptor);
+			_Writer = new websocket::SocketWriter(descriptor);
+			_Parser = new websocket::OutputParser(*_Writer);
+			_WSReader = new websocket::WebSocketReader();
+		}
 	}
 
 	const SOCKET getSocket() {
@@ -140,7 +176,16 @@ public:
 		switch (_TypeOfSocket) {
 		case NORMAL:
 			return write(descriptor, pTEXT, strlen(pTEXT));
-			break;
+		case WEB_SOCKET:
+			try {
+				_Parser->parseAndSend(pTEXT, NO_OF_CHARS);
+				//sendWSText(*_Writer, std::string(pTEXT, NO_OF_CHARS));
+			} catch (int e) {
+				Log.tinyprintf("Websocket write failed: %d\n", e);
+				std::cout << "Write failed: " << e << std::endl;
+				return -1;
+			}
+			return NO_OF_CHARS;
 			// TODO: Add Websocket handler;
 		}
 		return -1;
@@ -152,6 +197,26 @@ public:
 			return read(descriptor, arrTextOut, MAX_OUT_SIZE);
 			break;
 			// TODO: Add Websocket handler;
+		case WEB_SOCKET:
+			try {
+				std::vector<char> inputBuffer(MAX_OUT_SIZE);
+				const int readResult = _Reader->readAvailable((unsigned char *)inputBuffer.data(), inputBuffer.size());
+				if (readResult > 0) {
+					websocket::ReadResult readData = _WSReader->processInput(inputBuffer.data(), readResult);
+					memcpy(arrTextOut, readData.readBytes.data(), readData.readBytes.size());
+					if (MAX_OUT_SIZE > readData.readBytes.size()) {
+						arrTextOut[readData.readBytes.size()] = '\0';
+					}
+					return readData.readBytes.size();
+				}
+				else {
+					return readResult;
+				}
+			} catch (int e) {
+				Log.tinyprintf("Websocket read failed: %d\n", e);
+				std::cout << "Read failed: " << e << std::endl;
+				return -1;
+			}
 		}
 		return -1;
 	}
@@ -160,7 +225,7 @@ public:
 	CLinearTimeAbsolute last_time;
 
 #ifdef WIN32
-	// these are for the Windows NT TCP/IO
+// these are for the Windows NT TCP/IO
 #define SIZEOF_OVERLAPPED_BUFFERS 512
 	char input_buffer[SIZEOF_OVERLAPPED_BUFFERS];         // buffer for reading
 	char output_buffer[SIZEOF_OVERLAPPED_BUFFERS];// buffer for writing
@@ -282,7 +347,7 @@ extern void desc_addhash(DESC *);
 // From predicates.cpp
 //
 #define alloc_desc(s) (DESC *)pool_alloc(POOL_DESC,s, __FILE__, __LINE__)
-#define free_desc(b) pool_free(POOL_DESC,(char *)(b), __FILE__, __LINE__)
+#define free_desc(b) {b->cleanup();pool_free(POOL_DESC,(char *)(b), __FILE__, __LINE__);}
 extern void handle_prog(DESC *d, char *message);
 
 // From player.cpp

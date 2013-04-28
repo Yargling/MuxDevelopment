@@ -522,7 +522,7 @@ static CF_HAND(cf_int_array)
 
         if (pia->pi)
         {
-            delete [] pia->pi;
+            free(pia->pi);
             pia->pi = NULL;
         }
 

@@ -6,6 +6,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <errno.h>
+
 /* Compile time options */
 
 #define SIDE_EFFECT_FUNCTIONS   /* Those neat funcs that should be commands */

@@ -14,6 +14,15 @@
 
 namespace websocket {
 namespace handshaking {
+/* Represents a websocket header during the initial handshaking; the expected format is a standard HTTP header, e.g.:
+ *
+ * GET / HTTP/1.1
+ * Sec-WebSocket-Key: VyBVU6KslCfXQ5HS0SZ+vQ==
+ *
+ * Or more generally:
+ * <First line>
+ * <Key>: <value> -- per value
+ */
 class HandshakeHeader {
 private:
 	std::string _FirstLine;
@@ -22,7 +31,10 @@ public:
 	HandshakeHeader(const std::string& FirstLine);
 	HandshakeHeader(SocketReader& dataSource) throw (int);
 
-	std::string toString();
+	const std::string * getValue(const std::string& Key) const;
+	HandshakeHeader& setValue(const std::string& Key, const std::string& Value);
+
+	std::string toString() const;
 };
 
 }

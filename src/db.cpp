@@ -605,6 +605,9 @@ const char *PureName(dbref thing)
             }
             else
             {
+            	if (db[thing].purename != NULL) {
+            		delete[] db[thing].purename;
+            	}
                 db[thing].purename = StringCloneLen(pPureName, nPureName);
             }
 #endif // MEMORY_BASED

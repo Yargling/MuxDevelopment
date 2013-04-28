@@ -12,10 +12,11 @@
 #include <vector>
 #include <stdint.h>
 #include <string>
+#include "DataInputStream.h"
 
 namespace websocket {
 
-class SocketReader {
+class SocketReader : public DataInputStream {
 private:
 	const SOCKET _MySocket;
 	uint8_t * const _BufferedData;
@@ -30,6 +31,7 @@ public:
 	SocketReader(const SOCKET MySocket);
 	~SocketReader();
 
+	virtual uint8_t read() throw (int);
 	std::string readLine() throw (int);
 	int readAvailable(uint8_t * bufferOut, const uint_fast32_t BufferSize);
 };

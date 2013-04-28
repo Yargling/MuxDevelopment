@@ -1796,7 +1796,7 @@ void CHashFile::CloseAll(void)
         Sync();
         if (m_pDir)
         {
-            MEMFREE(m_pDir);
+            delete[] m_pDir;
             m_pDir = NULL;
         }
         if (m_hpCacheLookup)
