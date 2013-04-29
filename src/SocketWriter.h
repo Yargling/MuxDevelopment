@@ -36,7 +36,7 @@ private:
 					throw writeError;
 				}
 				else {
-					usleep(1000);
+					usleep(100);
 				}
 			} else {
 				continueTrying = false;
@@ -45,7 +45,7 @@ private:
 		_BufferIndex = 0;
 	}
 public:
-	SocketWriter(const SOCKET socket, const uint32_t BufferSize = 500U) :
+	SocketWriter(const SOCKET socket, const uint32_t BufferSize = 6000U) :
 			_MySocket(socket), _BufferedData(BufferSize), _BufferIndex(0U) {
 
 	}

@@ -126,6 +126,9 @@ public:
 	}
 
 	void sendToWebsocket(SocketWriter& Endpoint) {
+		if (Bytes->size() > 125) {
+			std::cout << "test" << std::endl;
+		}
 		if (Bytes != NULL) {
 			if (_Type == MODE_CHANGES) {
 				sendWSData(Endpoint, Bytes->data(), Bytes->size());
