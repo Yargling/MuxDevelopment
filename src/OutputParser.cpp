@@ -27,50 +27,63 @@ static const uint8_t ESC_END = uint8_t('m');
 static const uint8_t SUB_NEG_B = 250U;
 
 static void append(std::list<char>& bufferOfInterest,
+		std::list<char>::iterator& position,
 		const std::string& StringOfInterest) {
-	for (int i = 0; i < StringOfInterest.length(); i++) {
-		bufferOfInterest.push_back(StringOfInterest[i]);
-	}
-	//bufferOfInterest.sputn(StringOfInterest.c_str(), StringOfInterest.size());
+	bufferOfInterest.insert(position, StringOfInterest.begin(),
+			StringOfInterest.end());
+	position = bufferOfInterest.erase(position);
 }
 
 //TODO: Make sure this works right for UTF8 encoding!
-static const char * parseForHTML(const char* Data, const uint32_t Size) {
+static void parseForHTML(std::list<char>& DataInOut) {
 	//std::stringbuf buffer;
 	std::list<char> buffer;
-	for (size_t pos = 0; pos != Size; ++pos) {
-		switch (Data[pos]) {
+
+	std::list<char>::iterator dataToParseItr = DataInOut.begin();
+
+	while (dataToParseItr != DataInOut.end()) {
+		switch (*dataToParseItr) {
 		case '&':
-			append(buffer, "&amp;");
+			append(buffer, dataToParseItr, "&amp;");
 			break;
 		case '\"':
-			append(buffer, "&quot;");
+			append(buffer, dataToParseItr, "&quot;");
 			break;
 		case '\'':
-			append(buffer, "&apos;");
+			append(buffer, dataToParseItr, "&apos;");
 			break;
 		case '<':
-			append(buffer, "&lt;");
+			append(buffer, dataToParseItr, "&lt;");
 			break;
 		case '>':
-			append(buffer, "&gt;");
+			append(buffer, dataToParseItr, "&gt;");
 			break;
 		default:
-			buffer.push_back(Data[pos]);
+			dataToParseItr++;
 			break;
 		}
 	}
-	char * dataOut = new char[buffer.size()+1U];
-	std::list<char>::iterator bufferItr = buffer.begin();
-	uint32_t i = 0;
-	while (bufferItr != buffer.end()) {
-		dataOut[i]=*bufferItr;
-		bufferItr++;
-		i++;
-	}
-	dataOut[i] = '\0';
+}
 
-	return dataOut;
+static void parseToUTF8(std::list<char>& DataInOut) {
+	//std::stringbuf buffer;
+	std::list<char> buffer;
+
+	std::list<char>::iterator dataToParseItr = DataInOut.begin();
+
+	while (dataToParseItr != DataInOut.end()) {
+		char& currentByte = *dataToParseItr;
+		if ((uint8_t(currentByte) & 0x80U) != 0) {
+			const char originalValue = currentByte;
+			const char highBits = (originalValue & 0xC0) >> 6;
+			const char lowBits = (originalValue & 0x3F);
+			currentByte = 0xC0 + highBits;
+			const char newByte = char(0x80) + lowBits;
+			dataToParseItr++;
+			DataInOut.insert(dataToParseItr, newByte);
+		}
+		dataToParseItr++;
+	}
 }
 
 class Token {
@@ -82,13 +95,14 @@ private:
 	std::vector<uint8_t> * Bytes;
 	const TokenTypes _Type;
 
-	std::vector<uint8_t> * processModeChange(const uint8_t *DataPtr,
-			const uint32_t Size) {
+	std::vector<uint8_t> * processModeChange(const std::list<char>& DataIn) {
+		const std::vector<uint8_t> VectorCopy(DataIn.begin(), DataIn.end());
+		const std::list<char>::size_type Size = DataIn.size();
 		if (Size >= 3) {
-			if (DataPtr[0] == '[' && DataPtr[Size - 1] == 'm') {
-				uint8_t code = DataPtr[1] - '0';
+			if (VectorCopy[0] == '[' && VectorCopy[Size - 1] == 'm') {
+				uint8_t code = VectorCopy[1] - '0';
 				if (Size >= 4) {
-					code = (code * 10) + DataPtr[2] - '0';
+					code = (code * 10) + VectorCopy[2] - '0';
 				}
 				std::vector<uint8_t>* newVector = new std::vector<uint8_t>(1);
 				(*newVector)[0] = code;
@@ -97,27 +111,29 @@ private:
 		}
 		return NULL;
 	}
-	std::vector<uint8_t> * processString(const uint8_t *DataPtr,
-			const uint32_t Size) {
+	std::vector<uint8_t> * processString(std::list<char>& DataIn) {
 
-		const char* parsedText = parseForHTML((char*)DataPtr, Size);
+		parseForHTML(DataIn);
+		if (DataIn.size() == 688) {
+			std::cout << "test" << std::endl;
+		}
+		parseToUTF8(DataIn);
 		//parsedText
-		std::vector<uint8_t>* const VectorPtr = new std::vector<uint8_t>(strlen(parsedText));
-		memcpy(VectorPtr->data(), parsedText, VectorPtr->size());
-		delete[] parsedText;
+		std::vector<uint8_t>* const VectorPtr = new std::vector<uint8_t>(DataIn.begin(), DataIn.end());
 		return VectorPtr;
 	}
 public:
 
-	Token(const TokenTypes Type, const std::vector<uint8_t>& Data) :
+	Token(const TokenTypes Type, std::list<char>& DataIn) :
 			Bytes(NULL), _Type(Type) {
 		if (_Type == MODE_CHANGES) {
-			Bytes = processModeChange(Data.data(), Data.size());
+			Bytes = processModeChange(DataIn);
 		} else if (_Type == STRING) {
-			Bytes = processString(Data.data(), Data.size());
+			Bytes = processString(DataIn);
 		}
 	}
-	Token(const Token& RHS) : Bytes(new std::vector<uint8_t>(*RHS.Bytes)), _Type(RHS._Type) {
+	Token(const Token& RHS) :
+			Bytes(new std::vector<uint8_t>(*RHS.Bytes)), _Type(RHS._Type) {
 	}
 	~Token() {
 		if (Bytes != NULL) {
@@ -133,7 +149,7 @@ public:
 			if (_Type == MODE_CHANGES) {
 				sendWSData(Endpoint, Bytes->data(), Bytes->size());
 			} else if (_Type == STRING) {
-				sendWSText(Endpoint,(char*) (Bytes->data()), Bytes->size());
+				sendWSText(Endpoint, (char*) (Bytes->data()), Bytes->size());
 			}
 		}
 	}
@@ -165,15 +181,14 @@ struct OutputParse_Impl {
 
 	}
 	MuxStates _CurrentState;
-	std::list<uint8_t> _CurrentData;
+	std::list<char> _CurrentData;
 	SocketWriter& _Writer;
 
 	Token makeToken(Token::TokenTypes type);
 };
 
 Token OutputParse_Impl::makeToken(Token::TokenTypes type) {
-	std::vector<uint8_t> dataCopy(_CurrentData.begin(), _CurrentData.end());
-	const Token resultToken(type, dataCopy);
+	const Token resultToken(type, _CurrentData);
 	_CurrentData.clear();
 	return resultToken;
 }
@@ -211,11 +226,11 @@ void OutputParser::processInNegotiate(uint8_t byte) {
 	}
 }
 
-void OutputParser::processInEscapeSequence(std::list<Token>& tokens,
+void OutputParser::processInEscapeSequence(//std::list<Token>& tokens,
 		uint8_t byte) {
 	pImpl->_CurrentData.push_back(byte);
 	if (byte == ESC_END) {
-		tokens.push_back(pImpl->makeToken(Token::MODE_CHANGES));
+		pImpl->makeToken(Token::MODE_CHANGES).sendToWebsocket(pImpl->_Writer);
 		pImpl->_CurrentState = NORMAL_DATA;
 	}
 }
@@ -225,18 +240,20 @@ bool OutputParser::isDataEmpty() {
 }
 
 //TODO: Make sure this works with UTF8!
-void OutputParser::processInNormal(std::list<Token>& tokens,
+void OutputParser::processInNormal( //std::list<Token>& tokens,
 		const uint8_t Byte) {
 	switch (Byte) {
 	case IAC:
 		if (!isDataEmpty()) {
-			tokens.push_back(pImpl->makeToken(Token::STRING));
+			//tokens.push_back(pImpl->makeToken(Token::STRING));
+			pImpl->makeToken(Token::STRING).sendToWebsocket(pImpl->_Writer);
 		}
 		pImpl->_CurrentState = IAC_START;
 		break;
 	case ESC:
 		if (!isDataEmpty()) {
-			tokens.push_back(pImpl->makeToken(Token::STRING));
+			//tokens.push_back(pImpl->makeToken(Token::STRING));
+			pImpl->makeToken(Token::STRING).sendToWebsocket(pImpl->_Writer);
 		}
 		pImpl->_CurrentState = ESC_SEQ;
 		break;
@@ -246,13 +263,13 @@ void OutputParser::processInNormal(std::list<Token>& tokens,
 }
 
 void OutputParser::parseAndSend(const char * TextPtr, const size_t Size) {
-	std::list<Token> currentTokens;
+	//std::list<Token> currentTokens;
 
 	for (int i = 0; i < Size; i++) {
 		uint8_t currentByte = TextPtr[i];
 		switch (pImpl->_CurrentState) {
 		case NORMAL_DATA:
-			processInNormal(currentTokens, currentByte);
+			processInNormal(currentByte);
 			break;
 		case IAC_START:
 			processInIACStart(currentByte);
@@ -264,22 +281,22 @@ void OutputParser::parseAndSend(const char * TextPtr, const size_t Size) {
 			processInNegotiate(currentByte);
 			break;
 		case ESC_SEQ:
-			processInEscapeSequence(currentTokens, currentByte);
+			processInEscapeSequence(currentByte);
 			break;
 		}
 	}
 
 	if (pImpl->_CurrentData.size() > 0 && pImpl->_CurrentState == NORMAL_DATA) {
-		currentTokens.push_back(pImpl->makeToken(Token::STRING));
+		pImpl->makeToken(Token::STRING).sendToWebsocket(pImpl->_Writer);
 	}
 
-	std::list<Token>::iterator tokenItr = currentTokens.begin();
+	/*std::list<Token>::iterator tokenItr = currentTokens.begin();
 	while (tokenItr != currentTokens.end()) {
 		tokenItr->sendToWebsocket(pImpl->_Writer);
 		tokenItr++;
-	}
+	}*/
 	/*const std::string testString("Hello World");
-	sendWSText(pImpl->_Writer, testString);*/
+	 sendWSText(pImpl->_Writer, testString);*/
 }
 
 } /* namespace websocket */

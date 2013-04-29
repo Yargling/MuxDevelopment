@@ -22,10 +22,10 @@ private:
 	OutputParse_Impl * const pImpl;
 
 	bool isDataEmpty();
-	void processInEscapeSequence(std::list<Token>& tokens, uint8_t byte);
+	void processInEscapeSequence(uint8_t byte);
 	void processInNegotiate(uint8_t byte);
 	void processInIACStart(uint8_t byte);
-	void processInNormal(std::list<Token>& tokens,
+	void processInNormal(
 			const uint8_t Byte);
 public:
 	OutputParser(SocketWriter& Writer);

@@ -24,6 +24,27 @@ namespace websocket {
 
 static const uint32_t MaskSize = 4U;
 
+static void parseUTF8ToASCII(std::list<char>& DataInOut) {
+	//std::stringbuf buffer;
+	std::list<char> buffer;
+
+	std::list<char>::iterator dataToParseItr = DataInOut.begin();
+
+	while (dataToParseItr != DataInOut.end()) {
+		char& currentByte = *dataToParseItr;
+		if ((uint8_t(currentByte) & 0x80U) != 0) {
+			const char originalValue = currentByte;
+			const char highBits = (originalValue & 0xC0) >> 6;
+			const char lowBits = (originalValue & 0x3F);
+			currentByte = 0xC0 + highBits;
+			const char newByte = char(0x80) + lowBits;
+			dataToParseItr++;
+			DataInOut.insert(dataToParseItr, newByte);
+		}
+		dataToParseItr++;
+	}
+}
+
 struct WebSocketReader_Impl {
 	enum WebSocketState {
 		FIN_AND_OPCODE,
@@ -33,6 +54,9 @@ struct WebSocketReader_Impl {
 		MASK_BYTES,
 		PAYLOAD,
 	};
+	enum Utf8State {
+		SINGLE_BYTE, TWO_BYTE,
+	};
 	WebSocketState currentState;
 	bool isFinal;
 	bool isMasked;
@@ -40,6 +64,9 @@ struct WebSocketReader_Impl {
 	uint64_t packetSize;
 	std::vector<char> mask;
 	uint64_t stateCounter;
+	Utf8State payloadState;
+	uint8_t payloadStateCounter;
+	char currentCompositeChar;
 
 	WebSocketReader_Impl() :
 			currentState(FIN_AND_OPCODE), isFinal(false), isMasked(false), packetType(), packetSize(), mask(
@@ -66,6 +93,10 @@ struct WebSocketReader_Impl {
 	void setState(WebSocketState newState) {
 		if (newState == FIN_AND_OPCODE) {
 			// TODO: Packet complete - need to notify if close-packet?
+		} else if (newState == PAYLOAD) {
+			payloadState = SINGLE_BYTE;
+			payloadStateCounter = 0U;
+			currentCompositeChar = '\0';
 		}
 		currentState = newState;
 		stateCounter = 0U;
@@ -123,11 +154,40 @@ struct WebSocketReader_Impl {
 			if (isMasked) {
 				decodedChar ^= mask[stateCounter % mask.size()];
 			}
-			outputChars.push_back(decodedChar);
+			processUTF8(decodedChar, outputChars);
 		}
 		stateCounter++;
 		if (stateCounter == packetSize) {
 			setState(FIN_AND_OPCODE);
+		}
+	}
+
+	void switchUTF8State(Utf8State newState) {
+		currentCompositeChar = '\0';
+		payloadState = newState;
+		payloadStateCounter = 0;
+	}
+
+	bool match(const uint8_t Byte, const uint8_t Mask, const uint8_t NegMask) {
+		return ((Byte & Mask) == Mask) && (((~Byte) & NegMask) == NegMask);
+	}
+
+	void processUTF8(const uint8_t Byte, std::list<char>& outputChars) {
+		switch (payloadState) {
+		case SINGLE_BYTE:
+			if ((Byte & 0x80U) == 0) {
+				outputChars.push_back(Byte);
+			} else if (match(Byte, 0xC0U, 0x20U)) {
+				switchUTF8State(TWO_BYTE);
+				currentCompositeChar = (Byte & 0x3U) << 6;
+			}
+			break;
+		case TWO_BYTE:
+			if (match(Byte, 0x80U, 0x40U)) {
+				outputChars.push_back((Byte & 0x3F) | currentCompositeChar);
+			}
+			switchUTF8State(SINGLE_BYTE);
+			break;
 		}
 	}
 };
